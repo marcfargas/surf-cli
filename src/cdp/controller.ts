@@ -332,13 +332,6 @@ export class CDPController {
     } catch (e) {}
   }
 
-  async enablePageEvents(tabId: number): Promise<void> {
-    await this.ensureAttached(tabId);
-    try {
-      await this.send(tabId, "Page.enable");
-    } catch (e) {}
-  }
-
   async handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<{ success: boolean; error?: string }> {
     try {
       await this.send(tabId, "Page.handleJavaScriptDialog", {

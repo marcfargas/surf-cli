@@ -434,6 +434,9 @@ function mapToolToMessage(tool, args, tabId) {
       if (a.clear) {
         return { type: "EMULATE_GEO", clear: true, ...baseMsg };
       }
+      if (a.lat === undefined || a.lon === undefined) {
+        throw new Error("--lat and --lon are required for emulate.geo");
+      }
       return { type: "EMULATE_GEO", latitude: parseFloat(a.lat), longitude: parseFloat(a.lon), accuracy: parseFloat(a.accuracy) || 100, ...baseMsg };
     case "form.fill":
       let fillData = a.data;
@@ -962,7 +965,11 @@ const server = net.createServer((socket) => {
         
         if (msg.type === "tool_request") {
           log("Handling tool_request: " + msg.method + " " + (msg.params?.tool || ""));
-          handleToolRequest(msg, socket);
+          try {
+            handleToolRequest(msg, socket);
+          } catch (e) {
+            socket.write(JSON.stringify({ error: e.message || "Request failed" }) + "\n");
+          }
           continue;
         }
         

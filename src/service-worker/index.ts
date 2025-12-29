@@ -1005,7 +1005,7 @@ async function handleMessage(
         };
       } finally {
         try {
-          await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" });
+          await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" }, { frameId: 0 });
         } catch (e) {}
       }
     }
