@@ -1735,6 +1735,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
     }
+    case "GET_FILE_INPUT_SELECTOR": {
+      const { ref } = message;
+      if (!ref) {
+        sendResponse({ error: "No ref provided" });
+        return true;
+      }
+      const elementMap = getElementMap();
+      const elemRef = elementMap[ref];
+      if (!elemRef) {
+        sendResponse({ error: "Element not found (run page.read first)" });
+        return true;
+      }
+      const el = elemRef.element.deref() as HTMLElement | null;
+      if (!el) {
+        delete elementMap[ref];
+        sendResponse({ error: "Element no longer exists" });
+        return true;
+      }
+      if (!(el instanceof HTMLInputElement) || el.type !== "file") {
+        sendResponse({ error: "Element is not a file input" });
+        return true;
+      }
+      const uniqueId = `__pi_file_${Date.now()}`;
+      el.setAttribute("data-pi-file-id", uniqueId);
+      sendResponse({ selector: `[data-pi-file-id="${uniqueId}"]` });
+      return true;
+    }
     case "WAIT_FOR_NETWORK_IDLE": {
       const { timeout = 10000 } = message;
       const maxTimeout = Math.min(timeout, 60000);

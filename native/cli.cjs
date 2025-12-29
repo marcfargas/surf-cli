@@ -111,6 +111,20 @@ const TOOLS = {
       "form.fill": { desc: "Batch fill form fields", args: [], opts: { data: "JSON array of {ref, value}" } },
     }
   },
+  perf: {
+    desc: "Performance tracing",
+    commands: {
+      "perf.start": { desc: "Start performance trace", args: [], opts: { categories: "Trace categories (comma-separated)" } },
+      "perf.stop": { desc: "Stop trace and get metrics", args: [] },
+      "perf.metrics": { desc: "Get current performance metrics", args: [] },
+    }
+  },
+  upload: {
+    desc: "File upload",
+    commands: {
+      "upload": { desc: "Upload file(s) to input", args: [], opts: { ref: "Element ref (e.g., e5)", files: "File path(s) comma-separated" } },
+    }
+  },
 };
 
 const ALL_SOCKET_TOOLS = [

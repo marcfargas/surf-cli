@@ -246,6 +246,9 @@ function formatToolContent(result) {
   }
 
   if (result.success) {
+    if (result.metrics) {
+      return text(JSON.stringify(result.metrics, null, 2));
+    }
     return text("OK");
   }
   
@@ -438,6 +441,15 @@ function mapToolToMessage(tool, args, tabId) {
         try { fillData = JSON.parse(fillData); } catch (e) { throw new Error("Invalid JSON for --data"); }
       }
       return { type: "FORM_FILL", data: fillData, ...baseMsg };
+    case "perf.start":
+      return { type: "PERF_START", categories: a.categories ? a.categories.split(",") : undefined, ...baseMsg };
+    case "perf.stop":
+      return { type: "PERF_STOP", ...baseMsg };
+    case "perf.metrics":
+      return { type: "PERF_METRICS", ...baseMsg };
+    case "upload":
+      const files = a.files ? (typeof a.files === "string" ? a.files.split(",").map(f => f.trim()) : a.files) : [];
+      return { type: "UPLOAD_FILE", ref: a.ref, files, ...baseMsg };
     case "page.read":
       return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref }, ...baseMsg };
     case "page.text":

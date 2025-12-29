@@ -415,6 +415,74 @@ export class CDPController {
     }
   }
 
+  async startPerformanceTrace(tabId: number, categories?: string[]): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Performance.enable");
+      await this.send(tabId, "Tracing.start", {
+        categories: categories?.join(",") || "devtools.timeline,v8.execute,disabled-by-default-devtools.timeline",
+        transferMode: "ReturnAsStream",
+      });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async stopPerformanceTrace(tabId: number): Promise<{ success: boolean; metrics?: any; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      const metricsResult = await this.send(tabId, "Performance.getMetrics");
+      await this.send(tabId, "Tracing.end");
+      await this.send(tabId, "Performance.disable");
+      const metrics: Record<string, number> = {};
+      for (const m of metricsResult.metrics || []) {
+        metrics[m.name] = m.value;
+      }
+      return { success: true, metrics };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async getPerformanceMetrics(tabId: number): Promise<{ success: boolean; metrics?: Record<string, number>; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Performance.enable");
+      const result = await this.send(tabId, "Performance.getMetrics");
+      await this.send(tabId, "Performance.disable");
+      const metrics: Record<string, number> = {};
+      for (const m of result.metrics || []) {
+        metrics[m.name] = m.value;
+      }
+      return { success: true, metrics };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async setFileInputBySelector(tabId: number, selector: string, files: string[]): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "DOM.enable");
+      const doc = await this.send(tabId, "DOM.getDocument");
+      const queryResult = await this.send(tabId, "DOM.querySelector", {
+        nodeId: doc.root.nodeId,
+        selector,
+      });
+      if (!queryResult.nodeId) {
+        return { success: false, error: "Could not find element by selector" };
+      }
+      await this.send(tabId, "DOM.setFileInputFiles", {
+        nodeId: queryResult.nodeId,
+        files,
+      });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   getConsoleMessages(
     tabId: number,
     options?: {

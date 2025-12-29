@@ -1077,6 +1077,41 @@ async function handleMessage(
       return response;
     }
 
+    case "PERF_START": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.startPerformanceTrace(tabId, message.categories);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, message: "Performance tracing started" };
+    }
+
+    case "PERF_STOP": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.stopPerformanceTrace(tabId);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, metrics: result.metrics };
+    }
+
+    case "PERF_METRICS": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.getPerformanceMetrics(tabId);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, metrics: result.metrics };
+    }
+
+    case "UPLOAD_FILE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.ref) throw new Error("No ref provided");
+      if (!message.files || !message.files.length) throw new Error("No files provided");
+      const selectorResult = await chrome.tabs.sendMessage(tabId, {
+        type: "GET_FILE_INPUT_SELECTOR",
+        ref: message.ref,
+      });
+      if (selectorResult.error) throw new Error(selectorResult.error);
+      const setResult = await cdp.setFileInputBySelector(tabId, selectorResult.selector, message.files);
+      if (!setResult.success) throw new Error(setResult.error);
+      return { success: true, filesSet: message.files.length };
+    }
+
     case "EXECUTE_JAVASCRIPT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.code) throw new Error("No code provided");
