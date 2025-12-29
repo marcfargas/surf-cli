@@ -1073,7 +1073,7 @@ async function handleMessage(
       const response = await chrome.tabs.sendMessage(tabId, {
         type: "FORM_FILL",
         data: message.data,
-      });
+      }, { frameId: 0 });
       return response;
     }
 
@@ -1105,7 +1105,7 @@ async function handleMessage(
       const selectorResult = await chrome.tabs.sendMessage(tabId, {
         type: "GET_FILE_INPUT_SELECTOR",
         ref: message.ref,
-      });
+      }, { frameId: 0 });
       if (selectorResult.error) throw new Error(selectorResult.error);
       const setResult = await cdp.setFileInputBySelector(tabId, selectorResult.selector, message.files);
       if (!setResult.success) throw new Error(setResult.error);

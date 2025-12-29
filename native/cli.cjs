@@ -102,7 +102,7 @@ const TOOLS = {
     commands: {
       "emulate.network": { desc: "Emulate network conditions", args: ["preset"], opts: {} },
       "emulate.cpu": { desc: "CPU throttling (rate >= 1)", args: ["rate"], opts: {} },
-      "emulate.geo": { desc: "Override geolocation", args: [], opts: { lat: "Latitude", lon: "Longitude", clear: "Clear override" } },
+      "emulate.geo": { desc: "Override geolocation", args: [], opts: { lat: "Latitude", lon: "Longitude", accuracy: "Accuracy in meters (default: 100)", clear: "Clear override" } },
     }
   },
   form: {

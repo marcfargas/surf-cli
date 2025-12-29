@@ -432,6 +432,7 @@ export class CDPController {
   async stopPerformanceTrace(tabId: number): Promise<{ success: boolean; metrics?: any; error?: string }> {
     await this.ensureAttached(tabId);
     try {
+      await this.send(tabId, "Performance.enable");
       const metricsResult = await this.send(tabId, "Performance.getMetrics");
       await this.send(tabId, "Tracing.end");
       await this.send(tabId, "Performance.disable");
