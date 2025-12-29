@@ -27,6 +27,7 @@ function getScreenshot(id: string): { base64: string; width: number; height: num
 
 const tabGroups = new Map<number, number>();
 const navigationResolvers = new Map<number, () => void>();
+const tabNameRegistry = new Map<string, number>();
 
 chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId === 0) {
@@ -98,6 +99,11 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   cdp.detach(tabId);
   tabGroups.delete(tabId);
+  for (const [name, id] of tabNameRegistry) {
+    if (id === tabId) {
+      tabNameRegistry.delete(name);
+    }
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -186,6 +192,289 @@ async function handleMessage(
       return { success: true };
     }
 
+    case "TYPE_SUBMIT": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("No text provided");
+      await cdp.type(tabId, message.text);
+      await cdp.pressKey(tabId, message.submitKey || "Enter");
+      return { success: true };
+    }
+
+    case "CLICK_TYPE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("No text provided");
+      let clicked = false;
+      if (message.ref) {
+        try {
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          if (!result.error) clicked = true;
+        } catch {}
+      }
+      if (!clicked && message.coordinate) {
+        await cdp.click(tabId, message.coordinate[0], message.coordinate[1], "left", 1, 0);
+        clicked = true;
+      }
+      if (!clicked) {
+        const result = await cdp.evaluateScript(tabId, `(() => {
+          const el = document.querySelector('textarea, input[type="text"], input[type="search"], input:not([type]), [contenteditable="true"]');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { x: r.left + r.width/2, y: r.top + r.height/2 };
+        })()`);
+        if (result.result?.value) {
+          await cdp.click(tabId, result.result.value.x, result.result.value.y, "left", 1, 0);
+          clicked = true;
+        }
+      }
+      if (!clicked) return { error: "Could not find input element" };
+      await cdp.type(tabId, message.text);
+      return { success: true };
+    }
+
+    case "CLICK_TYPE_SUBMIT": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("No text provided");
+      let clicked = false;
+      if (message.ref) {
+        try {
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          if (!result.error) clicked = true;
+        } catch {}
+      }
+      if (!clicked && message.coordinate) {
+        await cdp.click(tabId, message.coordinate[0], message.coordinate[1], "left", 1, 0);
+        clicked = true;
+      }
+      if (!clicked) {
+        const result = await cdp.evaluateScript(tabId, `(() => {
+          const el = document.querySelector('textarea, input[type="text"], input[type="search"], input:not([type]), [contenteditable="true"]');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { x: r.left + r.width/2, y: r.top + r.height/2 };
+        })()`);
+        if (result.result?.value) {
+          await cdp.click(tabId, result.result.value.x, result.result.value.y, "left", 1, 0);
+          clicked = true;
+        }
+      }
+      if (!clicked) return { error: "Could not find input element" };
+      await cdp.type(tabId, message.text);
+      await cdp.pressKey(tabId, message.submitKey || "Enter");
+      return { success: true };
+    }
+
+    case "FIND_AND_TYPE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("No text provided");
+      const findResult = await cdp.evaluateScript(tabId, `(() => {
+        const selectors = [
+          'textarea:not([readonly]):not([disabled])',
+          'input[type="text"]:not([readonly]):not([disabled])',
+          'input[type="search"]:not([readonly]):not([disabled])',
+          'input:not([type]):not([readonly]):not([disabled])',
+          '[contenteditable="true"]',
+          '[role="textbox"]'
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              el.focus();
+              return { x: r.left + r.width/2, y: r.top + r.height/2, found: true };
+            }
+          }
+        }
+        return { found: false };
+      })()`);
+      const coords = findResult.result?.value;
+      if (!coords?.found) return { error: "No input field found on page" };
+      await cdp.click(tabId, coords.x, coords.y, "left", 1, 0);
+      await cdp.type(tabId, message.text);
+      if (message.submit) {
+        await cdp.pressKey(tabId, message.submitKey || "Enter");
+      }
+      return { success: true, coordinates: { x: coords.x, y: coords.y } };
+    }
+
+    case "AUTOCOMPLETE_SELECT": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("No text provided");
+      let clicked = false;
+      if (message.ref) {
+        try {
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          if (!result.error) clicked = true;
+        } catch {}
+      }
+      if (!clicked && message.coordinate) {
+        await cdp.click(tabId, message.coordinate[0], message.coordinate[1], "left", 1, 0);
+        clicked = true;
+      }
+      if (!clicked) return { error: "ref or coordinate required" };
+      await new Promise(r => setTimeout(r, 100));
+      await cdp.type(tabId, message.text);
+      const waitMs = message.waitMs || 500;
+      await new Promise(r => setTimeout(r, waitMs));
+      if (message.index && message.index > 0) {
+        for (let i = 0; i < message.index; i++) {
+          await cdp.pressKey(tabId, "ArrowDown");
+          await new Promise(r => setTimeout(r, 50));
+        }
+      }
+      await cdp.pressKey(tabId, "Enter");
+      return { success: true };
+    }
+
+    case "SET_INPUT_VALUE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (message.value === undefined) throw new Error("No value provided");
+      const selector = message.selector;
+      const ref = message.ref;
+      if (!selector && !ref) throw new Error("selector or ref required");
+      
+      const script = ref 
+        ? `(() => {
+            const el = document.querySelector('[data-pi-ref="${ref}"]') || 
+                       [...document.querySelectorAll('*')].find(e => e.getAttribute?.('data-ref') === '${ref}');
+            if (!el) return { error: 'Element not found' };
+            el.focus();
+            const isContentEditable = el.isContentEditable || el.getAttribute('contenteditable') === 'true';
+            const target = isContentEditable ? (el.querySelector('p') || el) : el;
+            if (isContentEditable) {
+              target.textContent = ${JSON.stringify(message.value)};
+            } else {
+              el.value = ${JSON.stringify(message.value)};
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return { success: true, contentEditable: isContentEditable };
+          })()`
+        : `(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return { error: 'Element not found: ' + ${JSON.stringify(selector)} };
+            el.focus();
+            const isContentEditable = el.isContentEditable || el.getAttribute('contenteditable') === 'true';
+            const target = isContentEditable ? (el.querySelector('p') || el) : el;
+            if (isContentEditable) {
+              target.textContent = ${JSON.stringify(message.value)};
+            } else {
+              el.value = ${JSON.stringify(message.value)};
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return { success: true, contentEditable: isContentEditable };
+          })()`;
+      
+      const result = await cdp.evaluateScript(tabId, script);
+      return result.result?.value || { error: "Script failed" };
+    }
+
+    case "SMART_TYPE": {
+      if (!tabId) throw new Error("No tabId provided");
+      const { selector, text, clear = true, submit = false } = message;
+      if (!selector) throw new Error("selector required");
+      if (text === undefined) throw new Error("text required");
+      
+      const script = `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return { error: 'Element not found: ' + ${JSON.stringify(selector)} };
+        
+        const isContentEditable = el.isContentEditable || 
+                                   el.getAttribute('contenteditable') === 'true';
+        const hasContentEditableChild = el.querySelector('[contenteditable="true"]');
+        
+        const target = hasContentEditableChild || el;
+        const useContentEditable = isContentEditable || !!hasContentEditableChild;
+        
+        target.focus();
+        
+        if (${clear}) {
+          if (useContentEditable) {
+            target.textContent = '';
+          } else {
+            target.value = '';
+          }
+        }
+        
+        if (useContentEditable) {
+          target.textContent = ${JSON.stringify(text)};
+        } else {
+          target.value = ${JSON.stringify(text)};
+        }
+        
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        if (${submit}) {
+          const form = el.closest('form');
+          const submitBtn = document.querySelector('button[type="submit"], button[data-testid*="send"], button[aria-label*="Send"]');
+          if (submitBtn) {
+            submitBtn.click();
+          } else if (form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true }));
+          } else {
+            target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          }
+        }
+        
+        return { success: true, contentEditable: useContentEditable };
+      })()`;
+      
+      const result = await cdp.evaluateScript(tabId, script);
+      return result.result?.value || { error: "Script failed" };
+    }
+
+    case "CLOSE_DIALOGS": {
+      if (!tabId) throw new Error("No tabId provided");
+      const maxAttempts = message.maxAttempts || 3;
+      for (let i = 0; i < maxAttempts; i++) {
+        await cdp.pressKey(tabId, "Escape");
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return { success: true };
+    }
+
+    case "PAGE_STATE": {
+      if (!tabId) throw new Error("No tabId provided");
+      const stateScript = `(() => {
+        const hasModal = !!(
+          document.querySelector('[role="dialog"]') ||
+          document.querySelector('[role="alertdialog"]') ||
+          document.querySelector('.modal:not([hidden])') ||
+          document.querySelector('[aria-modal="true"]') ||
+          document.querySelector('.MuiModal-root') ||
+          document.querySelector('.MuiDialog-root')
+        );
+        const hasDropdown = !!(
+          document.querySelector('[role="listbox"]') ||
+          document.querySelector('[role="menu"]:not([hidden])') ||
+          document.querySelector('.dropdown-menu.show') ||
+          document.querySelector('[aria-expanded="true"]')
+        );
+        const hasDatePicker = !!(
+          document.querySelector('[role="grid"][aria-label*="calendar" i]') ||
+          document.querySelector('.react-datepicker') ||
+          document.querySelector('.flatpickr-calendar.open') ||
+          document.querySelector('[class*="DatePicker"]')
+        );
+        const focusedEl = document.activeElement;
+        const focusedTag = focusedEl?.tagName?.toLowerCase();
+        const focusedType = focusedEl?.getAttribute?.('type');
+        return {
+          hasModal,
+          hasDropdown,
+          hasDatePicker,
+          hasOverlay: hasModal || hasDropdown || hasDatePicker,
+          focusedElement: focusedTag ? { tag: focusedTag, type: focusedType } : null,
+          url: location.href,
+          title: document.title
+        };
+      })()`;
+      const stateResult = await cdp.evaluateScript(tabId, stateScript);
+      return stateResult.result?.value || { error: "Failed to get page state" };
+    }
+
     case "EXECUTE_SCROLL": {
       if (!tabId) throw new Error("No tabId provided");
       const viewport = await cdp.getViewportSize(tabId);
@@ -241,12 +530,12 @@ async function handleMessage(
       } catch (e) {}
       await new Promise(resolve => setTimeout(resolve, 50));
       
+      let result;
       try {
-        const result = await chrome.tabs.sendMessage(tabId, {
+        result = await chrome.tabs.sendMessage(tabId, {
           type: "GENERATE_ACCESSIBILITY_TREE",
           options: message.options || {},
         }, { frameId: 0 });
-        return result;
       } catch (err) {
         return { 
           error: "Content script not loaded. Try refreshing the page.",
@@ -258,6 +547,16 @@ async function handleMessage(
           await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" });
         } catch (e) {}
       }
+      
+      if (message.options?.includeScreenshot) {
+        try {
+          const screenshot = await cdp.captureScreenshot(tabId);
+          return { ...result, screenshot };
+        } catch (err) {
+          return { ...result, screenshotError: "Failed to capture screenshot" };
+        }
+      }
+      return result;
     }
 
     case "GET_ELEMENT_COORDINATES": {
@@ -297,6 +596,75 @@ async function handleMessage(
       }
     }
 
+    case "SCROLL_TO_POSITION": {
+      if (!tabId) throw new Error("No tabId provided");
+      const position = message.position;
+      if (position === undefined) throw new Error("position required (\"top\", \"bottom\", or number)");
+      const selector = message.selector;
+      
+      const script = `(() => {
+        const findScrollable = () => {
+          const candidates = [...document.querySelectorAll("*")].filter(el => 
+            el.scrollHeight > el.clientHeight && el.clientHeight > 200
+          ).sort((a,b) => b.scrollHeight - a.scrollHeight);
+          return candidates[0] || document.documentElement;
+        };
+        
+        const container = ${selector ? `document.querySelector(${JSON.stringify(selector)}) || findScrollable()` : `findScrollable()`};
+        if (!container) return { error: "No scrollable container found" };
+        
+        const pos = ${JSON.stringify(position)};
+        if (pos === "bottom") {
+          container.scrollTop = container.scrollHeight;
+        } else if (pos === "top") {
+          container.scrollTop = 0;
+        } else if (typeof pos === "number") {
+          container.scrollTop = pos;
+        }
+        
+        return { 
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+          clientHeight: container.clientHeight,
+          atBottom: container.scrollTop + container.clientHeight >= container.scrollHeight - 10,
+          atTop: container.scrollTop < 10
+        };
+      })()`;
+      
+      const result = await cdp.evaluateScript(tabId, script);
+      return result.result?.value || { error: "Script failed" };
+    }
+
+    case "GET_SCROLL_INFO": {
+      if (!tabId) throw new Error("No tabId provided");
+      const selector = message.selector;
+      
+      const script = `(() => {
+        const findScrollable = () => {
+          const candidates = [...document.querySelectorAll("*")].filter(el => 
+            el.scrollHeight > el.clientHeight && el.clientHeight > 200
+          ).sort((a,b) => b.scrollHeight - a.scrollHeight);
+          return candidates[0] || document.documentElement;
+        };
+        
+        const container = ${selector ? `document.querySelector(${JSON.stringify(selector)}) || findScrollable()` : `findScrollable()`};
+        if (!container) return { error: "No scrollable container found" };
+        
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        return { 
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+          clientHeight: container.clientHeight,
+          atBottom: container.scrollTop + container.clientHeight >= container.scrollHeight - 10,
+          atTop: container.scrollTop < 10,
+          scrollPercentage: maxScroll > 0 ? Math.round((container.scrollTop / maxScroll) * 100) : 100
+        };
+      })()`;
+      
+      const result = await cdp.evaluateScript(tabId, script);
+      return result.result?.value || { error: "Script failed" };
+    }
+
     case "GET_PAGE_TEXT": {
       if (!tabId) throw new Error("No tabId provided");
       try {
@@ -314,7 +682,7 @@ async function handleMessage(
       try {
         return await chrome.tabs.sendMessage(tabId, { type: message.type });
       } catch (err) {
-        return { error: "Content script not loaded" };
+        return { error: "Content script not loaded. Try refreshing the page." };
       }
     }
 
@@ -353,20 +721,12 @@ async function handleMessage(
     case "CLICK_REF": {
       if (!tabId) throw new Error("No tabId provided");
       try {
-        const coords = await chrome.tabs.sendMessage(tabId, {
-          type: "GET_ELEMENT_COORDINATES",
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "CLICK_ELEMENT",
           ref: message.ref,
+          button: message.button || "left",
         }, { frameId: 0 });
-        if (coords.error) return { error: coords.error };
-
-        const button = message.button || "left";
-        if (button === "right") {
-          await cdp.rightClick(tabId, coords.x, coords.y);
-        } else if (button === "double") {
-          await cdp.doubleClick(tabId, coords.x, coords.y);
-        } else {
-          await cdp.click(tabId, coords.x, coords.y, "left", 1, 0);
-        }
+        if (result.error) return { error: result.error };
         return { success: true };
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
@@ -436,6 +796,33 @@ async function handleMessage(
           type: "WAIT_FOR_URL",
           pattern: message.pattern,
           timeout: message.timeout || 20000,
+        }, { frameId: 0 });
+        return result;
+      } catch (err) {
+        return { 
+          error: "Content script not loaded. Try refreshing the page.",
+          pageContent: "",
+          viewport: { width: 0, height: 0 }
+        };
+      } finally {
+        try {
+          await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" });
+        } catch (e) {}
+      }
+    }
+
+    case "WAIT_FOR_NETWORK_IDLE": {
+      if (!tabId) throw new Error("No tabId provided");
+      
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: "HIDE_FOR_TOOL_USE" }, { frameId: 0 });
+      } catch (e) {}
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "WAIT_FOR_NETWORK_IDLE",
+          timeout: message.timeout || 10000,
         }, { frameId: 0 });
         return result;
       } catch (err) {
@@ -600,6 +987,99 @@ async function handleMessage(
       };
     }
 
+    case "LIST_TABS": {
+      const tabs = await chrome.tabs.query({});
+      return {
+        tabs: tabs.map((t) => ({
+          id: t.id,
+          title: t.title,
+          url: t.url,
+          active: t.active,
+          windowId: t.windowId,
+        })),
+      };
+    }
+
+    case "NEW_TAB": {
+      const urls = message.urls || (message.url ? [message.url] : ["about:blank"]);
+      const createdTabs = [];
+      for (let i = 0; i < urls.length; i++) {
+        const newTab = await chrome.tabs.create({
+          url: urls[i],
+          active: i === 0,
+        });
+        if (newTab.id) createdTabs.push({ tabId: newTab.id, url: urls[i] });
+      }
+      if (createdTabs.length === 1) {
+        return { success: true, tabId: createdTabs[0].tabId, url: createdTabs[0].url };
+      }
+      return { success: true, tabs: createdTabs };
+    }
+
+    case "SWITCH_TAB": {
+      const targetTabId = message.tabId;
+      if (!targetTabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.update(targetTabId, { active: true });
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
+      return { success: true, tabId: targetTabId, url: tab.url, title: tab.title };
+    }
+
+    case "CLOSE_TAB": {
+      const tabIds = message.tabIds || (message.tabId ? [message.tabId] : []);
+      if (tabIds.length === 0) throw new Error("No tabId(s) provided");
+      await chrome.tabs.remove(tabIds);
+      if (tabIds.length === 1) {
+        return { success: true, tabId: tabIds[0] };
+      }
+      return { success: true, closed: tabIds };
+    }
+
+    case "TABS_REGISTER": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.name) throw new Error("No name provided");
+      tabNameRegistry.set(message.name, tabId);
+      return { success: true, name: message.name, tabId };
+    }
+
+    case "TABS_GET_BY_NAME": {
+      if (!message.name) throw new Error("No name provided");
+      const registeredTabId = tabNameRegistry.get(message.name);
+      if (!registeredTabId) {
+        return { error: `No tab registered with name "${message.name}"` };
+      }
+      try {
+        const tab = await chrome.tabs.get(registeredTabId);
+        return { tabId: registeredTabId, url: tab.url, title: tab.title };
+      } catch (e) {
+        tabNameRegistry.delete(message.name);
+        return { error: `Tab "${message.name}" no longer exists` };
+      }
+    }
+
+    case "TABS_LIST_NAMED": {
+      const namedTabs: { name: string; tabId: number; url?: string; title?: string }[] = [];
+      for (const [name, id] of tabNameRegistry) {
+        try {
+          const tab = await chrome.tabs.get(id);
+          namedTabs.push({ name, tabId: id, url: tab.url, title: tab.title });
+        } catch (e) {
+          tabNameRegistry.delete(name);
+        }
+      }
+      return { tabs: namedTabs };
+    }
+
+    case "TABS_UNREGISTER": {
+      if (!message.name) throw new Error("No name provided");
+      const deleted = tabNameRegistry.delete(message.name);
+      if (!deleted) {
+        return { success: false, error: `No tab registered with name "${message.name}"` };
+      }
+      return { success: true };
+    }
+
     case "GET_AUTH": {
       const { sendToNativeHost } = await import("../native/port-manager");
       try {
@@ -645,5 +1125,6 @@ initNativeMessaging(async (msg) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     tabId = tab?.id;
   }
-  return handleMessage({ ...msg, tabId }, {} as chrome.runtime.MessageSender);
+  const result = await handleMessage({ ...msg, tabId }, {} as chrome.runtime.MessageSender);
+  return { ...result, _resolvedTabId: tabId };
 });

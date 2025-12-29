@@ -3,11 +3,10 @@ export {};
 declare global {
   interface Window {
     __piElementMap?: Record<string, { element: WeakRef<Element>; role: string; name: string }>;
-    __piRefCounter?: number;
-    __piSnapshotCounter?: number;
     __piLastSnapshot?: { content: string; timestamp: number };
     __piHelpers?: typeof piHelpersImpl;
     piHelpers?: typeof piHelpersImpl;
+    __piRefs?: Record<string, Element>;
   }
 }
 
@@ -17,9 +16,182 @@ interface ModalState {
   clearedBy: string;
 }
 
+const VALID_ARIA_ROLES = new Set([
+  "alert", "alertdialog", "application", "article", "banner", "blockquote",
+  "button", "caption", "cell", "checkbox", "code", "columnheader", "combobox",
+  "complementary", "contentinfo", "definition", "deletion", "dialog", "directory",
+  "document", "emphasis", "feed", "figure", "form", "generic", "grid", "gridcell",
+  "group", "heading", "img", "insertion", "link", "list", "listbox", "listitem",
+  "log", "main", "mark", "marquee", "math", "menu", "menubar", "menuitem",
+  "menuitemcheckbox", "menuitemradio", "meter", "navigation", "none", "note",
+  "option", "paragraph", "presentation", "progressbar", "radio", "radiogroup",
+  "region", "row", "rowgroup", "rowheader", "scrollbar", "search", "searchbox",
+  "separator", "slider", "spinbutton", "status", "strong", "subscript",
+  "superscript", "switch", "tab", "table", "tablist", "tabpanel", "term",
+  "textbox", "time", "timer", "toolbar", "tooltip", "tree", "treegrid", "treeitem"
+]);
+
+function isFocusable(element: Element): boolean {
+  const tagName = element.tagName.toLowerCase();
+  if (["button", "input", "select", "textarea"].includes(tagName)) {
+    return !(element as HTMLButtonElement).disabled;
+  }
+  if (tagName === "a" && element.hasAttribute("href")) return true;
+  if (element.hasAttribute("tabindex")) {
+    const tabindex = parseInt(element.getAttribute("tabindex") || "", 10);
+    return !isNaN(tabindex) && tabindex >= 0;
+  }
+  if (element.getAttribute("contenteditable") === "true") return true;
+  return false;
+}
+
+function getExplicitRole(element: Element): string | null {
+  const roleAttr = element.getAttribute("role");
+  if (!roleAttr) return null;
+  const roles = roleAttr.split(/\s+/).filter(r => r);
+  for (const role of roles) {
+    if (VALID_ARIA_ROLES.has(role)) {
+      return role;
+    }
+  }
+  return null;
+}
+
+function getImplicitRole(element: Element): string {
+  const tag = element.tagName.toLowerCase();
+  const type = element.getAttribute("type");
+
+  const tagRoles: Record<string, string | ((el: Element) => string)> = {
+    a: (el) => el.hasAttribute("href") ? "link" : "generic",
+    article: "article",
+    aside: "complementary",
+    button: "button",
+    datalist: "listbox",
+    dd: "definition",
+    details: "group",
+    dialog: "dialog",
+    dt: "term",
+    fieldset: "group",
+    figure: "figure",
+    footer: (el) => el.closest("article, aside, main, nav, section") ? "generic" : "contentinfo",
+    form: (el) => el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby") ? "form" : "generic",
+    h1: "heading", h2: "heading", h3: "heading", h4: "heading", h5: "heading", h6: "heading",
+    header: (el) => el.closest("article, aside, main, nav, section") ? "generic" : "banner",
+    hr: "separator",
+    img: (el) => el.getAttribute("alt") === "" ? "presentation" : "img",
+    li: "listitem",
+    main: "main",
+    math: "math",
+    menu: "list",
+    meter: "meter",
+    nav: "navigation",
+    ol: "list",
+    optgroup: "group",
+    option: "option",
+    output: "status",
+    p: "paragraph",
+    progress: "progressbar",
+    search: "search",
+    section: (el) => el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby") ? "region" : "generic",
+    select: (el) => {
+      const s = el as HTMLSelectElement;
+      return s.hasAttribute("multiple") || (s.size && s.size > 1) ? "listbox" : "combobox";
+    },
+    table: "table",
+    tbody: "rowgroup",
+    td: "cell",
+    textarea: "textbox",
+    tfoot: "rowgroup",
+    th: "columnheader",
+    thead: "rowgroup",
+    time: "time",
+    tr: "row",
+    ul: "list",
+  };
+
+  if (tag === "input") {
+    const inputRoles: Record<string, string> = {
+      button: "button",
+      checkbox: "checkbox",
+      email: "textbox",
+      file: "button",
+      image: "button",
+      number: "spinbutton",
+      radio: "radio",
+      range: "slider",
+      reset: "button",
+      search: "searchbox",
+      submit: "button",
+      tel: "textbox",
+      text: "textbox",
+      url: "textbox",
+    };
+    return inputRoles[type || ""] || "textbox";
+  }
+
+  const roleOrFn = tagRoles[tag];
+  if (typeof roleOrFn === "function") {
+    return roleOrFn(element);
+  }
+  return roleOrFn || "generic";
+}
+
+function getResolvedRole(element: Element): string {
+  const explicitRole = getExplicitRole(element);
+  
+  if (!explicitRole) {
+    return getImplicitRole(element);
+  }
+  
+  if ((explicitRole === "none" || explicitRole === "presentation") && isFocusable(element)) {
+    return getImplicitRole(element);
+  }
+  
+  return explicitRole;
+}
+
 if (!window.__piElementMap) window.__piElementMap = {};
-if (!window.__piRefCounter) window.__piRefCounter = 0;
-if (!window.__piSnapshotCounter) window.__piSnapshotCounter = 0;
+
+let globalRefCounter = 0;
+
+function getOrAssignRef(element: Element, role: string, name: string): string {
+  const existing = (element as any)._piRef as { role: string; name: string; ref: string } | undefined;
+  if (existing && existing.role === role && existing.name === name) {
+    return existing.ref;
+  }
+  
+  const ref = `e${++globalRefCounter}`;
+  (element as any)._piRef = { role, name, ref };
+  return ref;
+}
+
+function detectModalStates(): ModalState[] {
+  const modals: ModalState[] = [];
+  
+  const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog[open]');
+  dialogs.forEach(dialog => {
+    const style = window.getComputedStyle(dialog);
+    const isVisible = style.display !== 'none' && 
+                      style.visibility !== 'hidden' && 
+                      style.opacity !== '0' &&
+                      (dialog as HTMLElement).offsetWidth > 0 &&
+                      (dialog as HTMLElement).offsetHeight > 0;
+    if (!isVisible) return;
+    
+    const role = dialog.getAttribute('role') || 'dialog';
+    let title = dialog.getAttribute('aria-label') || 
+                dialog.querySelector('[role="heading"], h1, h2, h3')?.textContent?.trim() ||
+                'Dialog';
+    if (title.length > 100) title = title.substring(0, 100) + '...';
+    modals.push({
+      type: role as 'dialog' | 'alertdialog',
+      description: `${role}: ${title}`,
+      clearedBy: 'computer(action=key, text=Escape)',
+    });
+  });
+  
+  return modals;
+}
 
 const piHelpersImpl = {
   wait(ms: number): Promise<void> {
@@ -203,11 +375,6 @@ function getElementMap() {
   return window.__piElementMap!;
 }
 
-function getNextRefId(): string {
-  const snapshot = window.__piSnapshotCounter || 0;
-  return `s${snapshot}_ref_${++window.__piRefCounter!}`;
-}
-
 function generateAccessibilityTree(
   filter: "all" | "interactive" = "interactive",
   maxDepth = 15,
@@ -223,54 +390,10 @@ function generateAccessibilityTree(
   isIncremental?: boolean;
 } {
   try {
-    window.__piSnapshotCounter = (window.__piSnapshotCounter || 0) + 1;
+    window.__piRefs = {};
 
     function getRole(element: Element): string {
-      const role = element.getAttribute("role");
-      if (role) return role;
-
-      const tag = element.tagName.toLowerCase();
-      const type = element.getAttribute("type");
-
-      const tagRoles: Record<string, string> = {
-        a: "link",
-        button: "button",
-        select: "combobox",
-        textarea: "textbox",
-        h1: "heading",
-        h2: "heading",
-        h3: "heading",
-        h4: "heading",
-        h5: "heading",
-        h6: "heading",
-        img: "image",
-        nav: "navigation",
-        main: "main",
-        header: "banner",
-        footer: "contentinfo",
-        section: "region",
-        article: "article",
-        aside: "complementary",
-        form: "form",
-        table: "table",
-        ul: "list",
-        ol: "list",
-        li: "listitem",
-        label: "label",
-      };
-
-      if (tag === "input") {
-        const inputRoles: Record<string, string> = {
-          submit: "button",
-          button: "button",
-          checkbox: "checkbox",
-          radio: "radio",
-          file: "button",
-        };
-        return inputRoles[type || ""] || "textbox";
-      }
-
-      return tagRoles[tag] || "generic";
+      return getResolvedRole(element);
     }
 
     function getName(element: Element): string {
@@ -473,6 +596,11 @@ function generateAccessibilityTree(
       );
     }
 
+    function hasCursorPointer(element: Element): boolean {
+      const style = window.getComputedStyle(element);
+      return style.cursor === "pointer";
+    }
+
     function shouldInclude(element: Element, options: { filter: string; refId: string | null }): boolean {
       const tag = element.tagName.toLowerCase();
       if (["script", "style", "meta", "link", "title", "noscript"].includes(tag)) return false;
@@ -492,7 +620,7 @@ function generateAccessibilityTree(
       if (getName(element).length > 0) return true;
 
       const role = getRole(element);
-      return role !== "generic" && role !== "image";
+      return role !== "generic" && role !== "img";
     }
 
     function traverse(element: Element, depth: number): string[] {
@@ -507,21 +635,13 @@ function generateAccessibilityTree(
         const name = getName(element);
         const ariaProps = getAriaProps(element);
 
-        let elemRefId: string | null = null;
-        for (const id of Object.keys(elementMap)) {
-          if (elementMap[id].element.deref() === element) {
-            elemRefId = id;
-            break;
-          }
-        }
-        if (!elemRefId) {
-          elemRefId = getNextRefId();
-          elementMap[elemRefId] = {
-            element: new WeakRef(element),
-            role,
-            name,
-          };
-        }
+        const elemRefId = getOrAssignRef(element, role, name);
+        window.__piRefs![elemRefId] = element;
+        elementMap[elemRefId] = {
+          element: new WeakRef(element),
+          role,
+          name,
+        };
 
         const indent = "  ".repeat(depth);
         let line = `${indent}${role}`;
@@ -533,6 +653,10 @@ function generateAccessibilityTree(
 
         const propsStr = formatAriaProps(ariaProps);
         if (propsStr) line += ` ${propsStr}`;
+
+        if (hasCursorPointer(element)) {
+          line += " [cursor=pointer]";
+        }
 
         const href = element.getAttribute("href");
         if (href) line += ` href="${href}"`;
@@ -556,7 +680,7 @@ function generateAccessibilityTree(
     }
 
     function normalizeLineForDiff(line: string): string {
-      return line.replace(/\[(s\d+_)?ref_\d+\]/g, '[REF]');
+      return line.replace(/\[e\d+\]/g, '[REF]');
     }
 
     function countOccurrences(lines: string[]): Map<string, number> {
@@ -615,26 +739,6 @@ function generateAccessibilityTree(
       }
       
       return { diff: diffLines.join('\n'), hasChanges: true };
-    }
-
-    function detectModalStates(): ModalState[] {
-      const modals: ModalState[] = [];
-      
-      const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog[open]');
-      dialogs.forEach(dialog => {
-        const role = dialog.getAttribute('role') || 'dialog';
-        let title = dialog.getAttribute('aria-label') || 
-                    dialog.querySelector('[role="heading"], h1, h2, h3')?.textContent?.trim() ||
-                    'Dialog';
-        if (title.length > 100) title = title.substring(0, 100) + '...';
-        modals.push({
-          type: role as 'dialog' | 'alertdialog',
-          description: `${role}: ${title}`,
-          clearedBy: 'computer(action=key, text=Escape)',
-        });
-      });
-      
-      return modals;
     }
 
     const elementMap = getElementMap();
@@ -713,17 +817,367 @@ function generateAccessibilityTree(
   }
 }
 
+function yamlEscapeValue(str: string): string {
+  if (!str.length) return '""';
+  if (/[\n\r]/.test(str) || /^[\s]/.test(str) || /[\s]$/.test(str) || /[:"{}[\]]/.test(str)) {
+    return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
+  }
+  return str;
+}
+
+function generateYamlTree(
+  filter: "all" | "interactive" = "interactive",
+  maxDepth = 15
+): { yaml: string; viewport: { width: number; height: number }; error?: string } {
+  try {
+    window.__piRefs = {};
+    
+    const lines: string[] = [];
+
+    function getRole(element: Element): string {
+      return getResolvedRole(element);
+    }
+
+    function getName(element: Element): string {
+      const tag = element.tagName.toLowerCase();
+
+      const labelledBy = element.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        const names = labelledBy.split(/\s+/).map(id => {
+          const el = document.getElementById(id);
+          return el?.textContent?.trim() || '';
+        }).filter(Boolean);
+        if (names.length) {
+          const joined = names.join(' ');
+          return joined.length > 100 ? joined.substring(0, 100) + '...' : joined;
+        }
+      }
+
+      if (tag === "select") {
+        const select = element as HTMLSelectElement;
+        const selected = select.querySelector("option[selected]") || 
+          (select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null);
+        if (selected?.textContent?.trim()) return selected.textContent.trim();
+      }
+
+      const ariaLabel = element.getAttribute("aria-label");
+      if (ariaLabel?.trim()) return ariaLabel.trim();
+
+      const placeholder = element.getAttribute("placeholder");
+      if (placeholder?.trim()) return placeholder.trim();
+
+      const title = element.getAttribute("title");
+      if (title?.trim()) return title.trim();
+
+      const alt = element.getAttribute("alt");
+      if (alt?.trim()) return alt.trim();
+
+      if (element.id) {
+        const label = document.querySelector(`label[for="${element.id}"]`);
+        if (label?.textContent?.trim()) return label.textContent.trim();
+      }
+
+      if (tag === "input") {
+        const input = element as HTMLInputElement;
+        const type = element.getAttribute("type") || "";
+        const value = element.getAttribute("value");
+        if (type === "submit" && value?.trim()) return value.trim();
+        if (input.value && input.value.length < 50 && input.value.trim()) return input.value.trim();
+      }
+
+      if (["button", "a", "summary"].includes(tag)) {
+        let textContent = "";
+        for (const node of element.childNodes) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            textContent += node.textContent;
+          }
+        }
+        if (textContent.trim()) return textContent.trim();
+      }
+
+      if (/^h[1-6]$/.test(tag)) {
+        const text = element.textContent;
+        if (text?.trim()) {
+          const t = text.trim();
+          return t.length > 100 ? t.substring(0, 100) + "..." : t;
+        }
+      }
+
+      if (tag === "img") return "";
+
+      let directText = "";
+      for (const node of element.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          directText += node.textContent;
+        }
+      }
+      if (directText?.trim() && directText.trim().length >= 3) {
+        const text = directText.trim();
+        return text.length > 100 ? text.substring(0, 100) + "..." : text;
+      }
+
+      return "";
+    }
+
+    interface AriaProps {
+      checked?: boolean | 'mixed';
+      disabled?: boolean;
+      expanded?: boolean;
+      level?: number;
+      pressed?: boolean | 'mixed';
+      selected?: boolean;
+      active?: boolean;
+    }
+
+    function getAriaProps(element: Element): AriaProps {
+      const props: AriaProps = {};
+      
+      const checkedAttr = element.getAttribute('aria-checked');
+      if (checkedAttr === 'true') props.checked = true;
+      else if (checkedAttr === 'false') props.checked = false;
+      else if (checkedAttr === 'mixed') props.checked = 'mixed';
+      else if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
+        if (element.type === 'checkbox' && element.indeterminate) {
+          props.checked = 'mixed';
+        } else {
+          props.checked = element.checked;
+        }
+      }
+      
+      const isDisableable = element instanceof HTMLButtonElement || 
+                            element instanceof HTMLInputElement || 
+                            element instanceof HTMLSelectElement || 
+                            element instanceof HTMLTextAreaElement;
+      if (element.getAttribute('aria-disabled') === 'true' || 
+          (isDisableable && (element as HTMLButtonElement).disabled) ||
+          element.closest('fieldset:disabled')) {
+        props.disabled = true;
+      }
+      
+      const expandedAttr = element.getAttribute('aria-expanded');
+      if (expandedAttr === 'true') props.expanded = true;
+      else if (expandedAttr === 'false') props.expanded = false;
+      
+      const pressedAttr = element.getAttribute('aria-pressed');
+      if (pressedAttr === 'true') props.pressed = true;
+      else if (pressedAttr === 'false') props.pressed = false;
+      else if (pressedAttr === 'mixed') props.pressed = 'mixed';
+      
+      const selectedAttr = element.getAttribute('aria-selected');
+      if (selectedAttr === 'true') props.selected = true;
+      else if (selectedAttr === 'false') props.selected = false;
+      
+      const activeAttr = element.getAttribute('aria-current');
+      if (activeAttr && activeAttr !== 'false') {
+        props.active = true;
+      }
+      
+      const tag = element.tagName.toLowerCase();
+      if (/^h[1-6]$/.test(tag)) {
+        props.level = parseInt(tag[1], 10);
+      } else {
+        const levelAttr = element.getAttribute('aria-level');
+        if (levelAttr) props.level = parseInt(levelAttr, 10);
+      }
+      
+      return props;
+    }
+
+    function formatAriaProps(props: AriaProps): string {
+      const parts: string[] = [];
+      
+      if (props.checked !== undefined) {
+        parts.push(props.checked === 'mixed' ? '[checked=mixed]' : props.checked ? '[checked]' : '[unchecked]');
+      }
+      if (props.disabled) parts.push('[disabled]');
+      if (props.expanded !== undefined) {
+        parts.push(props.expanded ? '[expanded]' : '[collapsed]');
+      }
+      if (props.pressed !== undefined) {
+        parts.push(props.pressed === 'mixed' ? '[pressed=mixed]' : props.pressed ? '[pressed]' : '[not-pressed]');
+      }
+      if (props.selected !== undefined) {
+        parts.push(props.selected ? '[selected]' : '[not-selected]');
+      }
+      if (props.active) parts.push('[active]');
+      if (props.level !== undefined) {
+        parts.push(`[level=${props.level}]`);
+      }
+      
+      return parts.join(' ');
+    }
+
+    function isVisible(element: Element): boolean {
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        (element as HTMLElement).offsetWidth > 0 &&
+        (element as HTMLElement).offsetHeight > 0
+      );
+    }
+
+    function isInteractive(element: Element): boolean {
+      const tag = element.tagName.toLowerCase();
+      return (
+        ["a", "button", "input", "select", "textarea", "details", "summary"].includes(tag) ||
+        element.hasAttribute("onclick") ||
+        element.hasAttribute("tabindex") ||
+        element.getAttribute("role") === "button" ||
+        element.getAttribute("role") === "link" ||
+        element.getAttribute("contenteditable") === "true"
+      );
+    }
+
+    function isLandmark(element: Element): boolean {
+      const tag = element.tagName.toLowerCase();
+      return (
+        ["h1", "h2", "h3", "h4", "h5", "h6", "nav", "main", "header", "footer", "section", "article", "aside"].includes(tag) ||
+        element.hasAttribute("role")
+      );
+    }
+
+    function hasCursorPointer(element: Element): boolean {
+      const style = window.getComputedStyle(element);
+      return style.cursor === "pointer";
+    }
+
+    function buildKey(role: string, name: string, element: Element, ariaProps: AriaProps): string {
+      let key = role;
+      if (name) {
+        key += ' ' + yamlEscapeValue(name);
+      }
+      
+      const ref = getOrAssignRef(element, role, name);
+      window.__piRefs![ref] = element;
+      key += ` [ref=${ref}]`;
+      
+      const propsStr = formatAriaProps(ariaProps);
+      if (propsStr) key += ` ${propsStr}`;
+      
+      if (hasCursorPointer(element)) {
+        key += ' [cursor=pointer]';
+      }
+      
+      return key;
+    }
+
+    function getElementProps(element: Element): Record<string, string> {
+      const props: Record<string, string> = {};
+      const href = element.getAttribute("href");
+      if (href) props.url = href;
+      const placeholder = element.getAttribute("placeholder");
+      if (placeholder) props.placeholder = placeholder;
+      return props;
+    }
+
+    function traverse(element: Element, depth: number, parentIncluded: boolean): void {
+      if (depth > maxDepth) return;
+      
+      const tag = element.tagName.toLowerCase();
+      if (["script", "style", "meta", "link", "title", "noscript"].includes(tag)) return;
+      if (filter !== "all" && element.getAttribute("aria-hidden") === "true") return;
+      if (filter !== "all" && !isVisible(element)) return;
+      
+      if (filter !== "all") {
+        const rect = element.getBoundingClientRect();
+        if (!(rect.top < window.innerHeight && rect.bottom > 0 && rect.left < window.innerWidth && rect.right > 0)) {
+          return;
+        }
+      }
+      
+      const role = getRole(element);
+      const name = getName(element);
+      const ariaProps = getAriaProps(element);
+      
+      const isInteractiveEl = isInteractive(element);
+      const isLandmarkEl = isLandmark(element);
+      const hasName = name.length > 0;
+      
+      let include: boolean;
+      if (filter === "interactive") {
+        include = isInteractiveEl;
+      } else if (filter === "all") {
+        include = true;
+      } else {
+        include = isInteractiveEl || isLandmarkEl || hasName || (role !== "generic" && role !== "img");
+      }
+      
+      if (include) {
+        const indent = "  ".repeat(depth);
+        const key = buildKey(role, name, element, ariaProps);
+        const props = getElementProps(element);
+        
+        const children: Element[] = [];
+        for (const child of element.children) {
+          children.push(child);
+        }
+        
+        const hasChildren = children.length > 0;
+        const hasProps = Object.keys(props).length > 0;
+        
+        if (!hasChildren && !hasProps) {
+          lines.push(`${indent}- ${key}`);
+        } else {
+          lines.push(`${indent}- ${key}:`);
+          for (const [propName, propValue] of Object.entries(props)) {
+            lines.push(`${indent}  - /${propName}: ${yamlEscapeValue(propValue)}`);
+          }
+          for (const child of children) {
+            traverse(child, depth + 1, true);
+          }
+        }
+      } else {
+        for (const child of element.children) {
+          traverse(child, depth, parentIncluded);
+        }
+      }
+    }
+
+    traverse(document.body, 0, false);
+
+    const yaml = lines.join('\n');
+    
+    if (yaml.length > 50000) {
+      return {
+        error: `Output exceeds 50000 character limit (${yaml.length} characters). Try using filter="interactive".`,
+        yaml: "",
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      };
+    }
+
+    return {
+      yaml: yaml + `\n\n[Viewport: ${window.innerWidth}x${window.innerHeight}]`,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  } catch (err) {
+    return {
+      error: `Error generating YAML tree: ${err instanceof Error ? err.message : "Unknown error"}`,
+      yaml: "",
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  }
+}
+
 function getElementCoordinates(ref: string): { x: number; y: number; error?: string } {
   const elementMap = getElementMap();
   const elemRef = elementMap[ref];
-  if (!elemRef) {
-    return { x: 0, y: 0, error: `Element ${ref} not found. Use read_page to get current elements.` };
+  let element: Element | undefined;
+  
+  if (elemRef) {
+    element = elemRef.element.deref();
+    if (!element) {
+      delete elementMap[ref];
+    }
   }
-
-  const element = elemRef.element.deref();
+  
+  if (!element && window.__piRefs) {
+    element = window.__piRefs[ref];
+  }
+  
   if (!element) {
-    delete elementMap[ref];
-    return { x: 0, y: 0, error: `Element ${ref} no longer exists. Use read_page to get current elements.` };
+    return { x: 0, y: 0, error: `Element ${ref} not found. Use read_page to get current elements.` };
   }
 
   const rect = element.getBoundingClientRect();
@@ -736,14 +1190,21 @@ function getElementCoordinates(ref: string): { x: number; y: number; error?: str
 function setFormValue(ref: string, value: string | boolean | number): { success: boolean; error?: string } {
   const elementMap = getElementMap();
   const elemRef = elementMap[ref];
-  if (!elemRef) {
-    return { success: false, error: `Element ${ref} not found. Use read_page to get current elements.` };
+  let element: Element | undefined;
+  
+  if (elemRef) {
+    element = elemRef.element.deref();
+    if (!element) {
+      delete elementMap[ref];
+    }
   }
-
-  const element = elemRef.element.deref();
+  
+  if (!element && window.__piRefs) {
+    element = window.__piRefs[ref];
+  }
+  
   if (!element) {
-    delete elementMap[ref];
-    return { success: false, error: `Element ${ref} no longer exists. Use read_page to get current elements.` };
+    return { success: false, error: `Element ${ref} not found. Use read_page to get current elements.` };
   }
 
   const tagName = element.tagName.toLowerCase();
@@ -826,14 +1287,21 @@ function getPageText(): { text: string; title: string; url: string; error?: stri
 function scrollToElement(ref: string): { success: boolean; error?: string } {
   const elementMap = getElementMap();
   const elemRef = elementMap[ref];
-  if (!elemRef) {
-    return { success: false, error: `Element ${ref} not found` };
+  let element: Element | undefined;
+  
+  if (elemRef) {
+    element = elemRef.element.deref();
+    if (!element) {
+      delete elementMap[ref];
+    }
   }
-
-  const element = elemRef.element.deref();
+  
+  if (!element && window.__piRefs) {
+    element = window.__piRefs[ref];
+  }
+  
   if (!element) {
-    delete elementMap[ref];
-    return { success: false, error: `Element ${ref} no longer exists` };
+    return { success: false, error: `Element ${ref} not found. Run read_page to get current element refs.` };
   }
 
   element.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -861,12 +1329,20 @@ function uploadImage(
     if (ref) {
       const elementMap = getElementMap();
       const elemRef = elementMap[ref];
-      if (!elemRef) {
-        return { success: false, error: `Element ${ref} not found` };
+      
+      if (elemRef) {
+        targetElement = elemRef.element.deref() as HTMLElement | null;
+        if (!targetElement) {
+          delete elementMap[ref];
+        }
       }
-      targetElement = elemRef.element.deref() as HTMLElement | null;
+      
+      if (!targetElement && window.__piRefs) {
+        targetElement = window.__piRefs[ref] as HTMLElement | null;
+      }
+      
       if (!targetElement) {
-        return { success: false, error: `Element ${ref} no longer exists` };
+        return { success: false, error: `Element ${ref} not found. Run read_page to get current element refs.` };
       }
     } else if (coordinate) {
       targetElement = document.elementFromPoint(coordinate[0], coordinate[1]) as HTMLElement | null;
@@ -911,18 +1387,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case "GENERATE_ACCESSIBILITY_TREE": {
       const options = message.options || {};
-      const result = generateAccessibilityTree(
-        options.filter || "interactive",
-        options.depth ?? 15,
-        options.refId,
-        options.forceFullSnapshot ?? false
-      );
-      sendResponse(result);
+      
+      if (options.format === "yaml") {
+        const result = generateYamlTree(
+          options.filter || "interactive",
+          options.depth ?? 15
+        );
+        const modalStates = detectModalStates();
+        if (result.error) {
+          sendResponse({ error: result.error, pageContent: "", viewport: result.viewport });
+        } else {
+          sendResponse({ 
+            pageContent: result.yaml, 
+            viewport: result.viewport,
+            modalStates: modalStates.length > 0 ? modalStates : undefined,
+            modalLimitations: 'Only custom modals ([role=dialog]) detected. Native alert/confirm/prompt dialogs and system file choosers cannot be detected from content scripts.',
+          });
+        }
+      } else {
+        const result = generateAccessibilityTree(
+          options.filter || "interactive",
+          options.depth ?? 15,
+          options.refId,
+          options.forceFullSnapshot ?? false
+        );
+        sendResponse(result);
+      }
       break;
     }
     case "GET_ELEMENT_COORDINATES": {
       const result = getElementCoordinates(message.ref);
       sendResponse(result);
+      break;
+    }
+    case "CLICK_ELEMENT": {
+      const elementMap = getElementMap();
+      const elemRef = elementMap[message.ref];
+      let element: Element | undefined;
+      if (elemRef) {
+        element = elemRef.element.deref();
+        if (!element) delete elementMap[message.ref];
+      }
+      if (!element && window.__piRefs) {
+        element = window.__piRefs[message.ref];
+      }
+      if (!element) {
+        sendResponse({ error: `Element ${message.ref} not found. Use read_page to get current elements.` });
+        break;
+      }
+      if (message.button === "double") {
+        element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
+      } else if (message.button === "right") {
+        element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: window }));
+      } else {
+        (element as HTMLElement).click();
+      }
+      sendResponse({ success: true });
       break;
     }
     case "FORM_INPUT": {
@@ -1081,6 +1601,86 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!waitResult.success) {
           sendResponse({ 
             error: waitResult.error, 
+            waited: waitResult.waited,
+            pageContent: "", 
+            viewport: { width: window.innerWidth, height: window.innerHeight } 
+          });
+          return;
+        }
+        const treeResult = generateAccessibilityTree("interactive", 15, undefined, true);
+        sendResponse({ ...treeResult, waited: waitResult.waited });
+      });
+      return true;
+    }
+    case "WAIT_FOR_NETWORK_IDLE": {
+      const { timeout = 10000 } = message;
+      const maxTimeout = Math.min(timeout, 60000);
+
+      const adPatterns = [
+        "doubleclick.net", "googlesyndication.com", "googletagmanager.com",
+        "google-analytics.com", "facebook.net", "connect.facebook.net",
+        "analytics", "ads", "tracking", "pixel", "hotjar.com", "clarity.ms",
+        "mixpanel.com", "segment.com", "newrelic.com", "nr-data.net",
+        "/tracker/", "/collector/", "/beacon/", "/telemetry/", "/log/",
+        "/events/", "/track.", "/metrics/"
+      ];
+
+      const nonCriticalTypes = ["img", "image", "font", "icon"];
+
+      const isAdOrTracking = (url: string): boolean => {
+        return adPatterns.some(pattern => url.includes(pattern));
+      };
+
+      const isNonCritical = (entry: PerformanceResourceTiming): boolean => {
+        const type = entry.initiatorType || "unknown";
+        if (nonCriticalTypes.includes(type)) return true;
+        if (/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|eot)(\?|$)/i.test(entry.name)) return true;
+        return false;
+      };
+
+      const getPendingRequests = (): PerformanceResourceTiming[] => {
+        const now = performance.now();
+        const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+        return resources.filter(entry => {
+          if (entry.responseEnd !== 0) return false;
+          if (entry.name.startsWith("data:")) return false;
+          if (entry.name.length > 500) return false;
+          if (isAdOrTracking(entry.name)) return false;
+          const loadingDuration = now - entry.startTime;
+          if (loadingDuration > 10000) return false;
+          if (isNonCritical(entry) && loadingDuration > 3000) return false;
+          return true;
+        });
+      };
+
+      const startTime = Date.now();
+
+      const waitForIdle = (): Promise<{ success: boolean; waited: number; pendingCount?: number }> => {
+        return new Promise((resolve) => {
+          const check = () => {
+            const pending = getPendingRequests();
+            const elapsed = Date.now() - startTime;
+            
+            if (pending.length === 0) {
+              resolve({ success: true, waited: elapsed });
+              return;
+            }
+            
+            if (elapsed >= maxTimeout) {
+              resolve({ success: false, waited: elapsed, pendingCount: pending.length });
+              return;
+            }
+            
+            setTimeout(check, 100);
+          };
+          check();
+        });
+      };
+
+      waitForIdle().then((waitResult) => {
+        if (!waitResult.success) {
+          sendResponse({ 
+            error: `Network not idle after ${waitResult.waited}ms (${waitResult.pendingCount} requests pending)`,
             waited: waitResult.waited,
             pageContent: "", 
             viewport: { width: window.innerWidth, height: window.innerHeight } 

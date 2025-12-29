@@ -41,13 +41,17 @@ const readPageSchema = Type.Object({
   forceFullSnapshot: Type.Optional(Type.Boolean({
     description: "Force full snapshot even if incremental update is available (default: false)",
   })),
+  format: Type.Optional(Type.Union([
+    Type.Literal("tree"),
+    Type.Literal("yaml"),
+  ], { description: "Output format: 'tree' (default) or 'yaml'" })),
 });
 const readPageTool: AgentTool<typeof readPageSchema, any> = {
   name: "read_page",
   label: "Read Page",
-  description: "Get accessibility tree with element refs for interaction. Use filter='interactive' for clickable elements only. Returns refs like [s1_ref_42] that can be used with computer tool clicks and form_input. Includes ARIA states (checked, disabled, expanded, etc.) and incremental diff when called repeatedly within 5 seconds. Output limited to 50KB.",
+  description: "Get accessibility tree with element refs for interaction. Use filter='interactive' for clickable elements only. Returns refs like [e42] that can be used with computer tool clicks and form_input. Includes ARIA states (checked, disabled, expanded, etc.) and incremental diff when called repeatedly within 5 seconds. Output limited to 50KB.",
   parameters: readPageSchema,
-  execute: async (toolCallId, { filter, ref_id, forceFullSnapshot }, signal) => {
+  execute: async (toolCallId, { filter, ref_id, forceFullSnapshot, format }, signal) => {
     const tabId = await getTargetTabId();
     const result = await chrome.runtime.sendMessage({
       type: "READ_PAGE",
@@ -56,6 +60,7 @@ const readPageTool: AgentTool<typeof readPageSchema, any> = {
         filter: filter || "interactive", 
         refId: ref_id,
         forceFullSnapshot: forceFullSnapshot ?? false,
+        format: format,
       },
     });
     if (result.error) {
@@ -72,9 +77,10 @@ const readPageTool: AgentTool<typeof readPageSchema, any> = {
     }
     
     if (result.modalStates && result.modalStates.length > 0) {
-      parts.push(`\n--- Active Modals ---`);
+      parts.push(`\n[ACTION REQUIRED] Modal blocking page - dismiss before proceeding:`);
+      parts.push(`  -> Press Escape key: computer(action="key", text="Escape")`);
       for (const modal of result.modalStates) {
-        parts.push(`${modal.description} (dismiss: ${modal.clearedBy})`);
+        parts.push(`  - ${modal.description}`);
       }
     }
     
@@ -90,7 +96,7 @@ const readPageTool: AgentTool<typeof readPageSchema, any> = {
 };
 
 const formInputSchema = Type.Object({
-  ref: Type.String({ description: "Element ref from read_page (e.g., s1_ref_42)" }),
+  ref: Type.String({ description: "Element ref from read_page (e.g., e42)" }),
   value: Type.Union([Type.String(), Type.Boolean(), Type.Number()], {
     description: "Value to set (string for text, boolean for checkbox, etc.)",
   }),

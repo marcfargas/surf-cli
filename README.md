@@ -1,193 +1,200 @@
-# Pi Agent Chrome Extension
+# Pi Chrome Extension
 
-AI-powered browser automation and chat extension with native messaging support for pi-coding-agent integration.
+Browser automation via Chrome extension with CLI and socket API.
 
 ## Features
 
-- **Browser Automation**: Control the browser with mouse, keyboard, and navigation actions via CDP
-- **Page Understanding**: Accessibility tree extraction for intelligent page interaction
-- **Visual Feedback**: Glow border and stop button when agent is active
-- **Chat Interface**: Full ChatPanel integration from pi-web-ui
-- **Session Persistence**: Per-tab conversation history (persists until browser closes)
-- **Debug Mode**: Optional verbose logging for troubleshooting
-- **Native Messaging**: Unix socket server for pi-coding-agent integration (`/tmp/pi-chrome.sock`)
-- **JavaScript Execution**: Run JS on pages via CDP (bypasses CSP restrictions)
-- **Console/Network Monitoring**: Track console messages and network requests via CDP events
+- **CLI**: `pi-chrome` command for terminal-based browser control
+- **Socket API**: JSON protocol via Unix socket for agent integration
+- **50+ Tools**: Tabs, scrolling, input, screenshots, JavaScript execution
+- **Page Understanding**: Accessibility tree extraction with element refs
+- **CDP-based**: Bypasses CSP restrictions, works on any page
 
 ## Installation
 
-### Development
-
 ```bash
 npm install
-npm run dev      # Watch mode
-npm run build    # Production build
-npm run check    # Type check
+npm run build
+npm link              # Makes 'pi-chrome' CLI available globally
 ```
 
-### Load in Chrome
+### Load Extension in Chrome
 
 1. Open `chrome://extensions`
-2. Enable "Developer mode" (top right toggle)
-3. Click "Load unpacked"
-4. Select the `dist/` folder
+2. Enable "Developer mode"
+3. Click "Load unpacked" and select the `dist/` folder
 
-## Usage
-
-1. Click the Pi Agent icon or press `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Windows/Linux)
-2. Enter your API key when prompted
-3. Chat with the agent to control the browser
-
-### Example Commands
-
-- "Take a screenshot"
-- "Navigate to github.com"
-- "Read the page and find the search button"
-- "Click on the login link"
-- "Fill in the email field with test@example.com"
-
-## Available Tools
-
-### Core Tools (Side Panel)
-
-| Tool | Description |
-|------|-------------|
-| `computer` | Unified mouse/keyboard actions (click, type, key, scroll, hover, drag, wait) |
-| `read_page` | Get page accessibility tree with element ref_ids |
-| `form_input` | Set form field values by ref_id (more reliable than click+type) |
-| `screenshot` | Capture the current page |
-| `navigate` | Go to a URL or back/forward (waits for page load) |
-| `get_page_text` | Extract readable text from page |
-| `wait` | Wait for a duration (respects abort signal) |
-
-### Additional Tools (Native Messaging)
-
-| Tool | Description |
-|------|-------------|
-| `tabs_context` | Get all open tabs with IDs, titles, URLs |
-| `tabs_create` | Create a new empty tab |
-| `javascript_tool` | Execute JavaScript on page via CDP (bypasses CSP) |
-| `read_console_messages` | Read browser console messages (log, warn, error) |
-| `read_network_requests` | Read HTTP requests (XHR, Fetch, etc.) |
-| `upload_image` | Upload screenshot to file input or drag-drop target |
-| `resize_window` | Resize browser window to specific dimensions |
-
-## Architecture
-
-```
-src/
-├── sidepanel/          # Side panel UI (ChatPanel)
-├── service-worker/     # Background service worker (message routing, CDP orchestration)
-├── content/            # Content scripts
-│   ├── accessibility-tree.ts  # Page understanding, element refs, upload_image
-│   └── visual-indicator.ts    # Glow border, stop button
-├── cdp/                # Chrome DevTools Protocol controller
-│   └── controller.ts          # Mouse, keyboard, screenshot, console/network tracking
-├── tools/              # Agent tools
-│   ├── browser-tools.ts       # High-level tools (screenshot, navigate, etc.)
-│   ├── computer-tool.ts       # Unified computer tool
-│   └── shared.ts              # Shared utilities
-├── storage/            # Chrome storage backend for pi-web-ui
-├── options/            # Options page (API keys, debug mode, heartbeat interval)
-└── utils/              # Utilities
-    └── debug.ts               # Debug logging
-
-native/
-└── host.cjs            # Native messaging host with Unix socket server
-```
-
-## Native Messaging Integration
-
-The extension includes a native messaging host that exposes browser tools to external agents via Unix socket.
-
-### Setup
+### Setup Native Host
 
 ```bash
 cd native
-./install.sh           # Install native host manifest
-node host.cjs          # Start the native host (creates /tmp/pi-chrome.sock)
+./install.sh          # Install native messaging manifest
 ```
 
-### Protocol
+The extension auto-starts the socket server at `/tmp/pi-chrome.sock`.
 
-Send JSON-RPC style requests to `/tmp/pi-chrome.sock`:
+## CLI Usage
 
 ```bash
-(echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tabs_context","args":{}},"id":"1"}'; sleep 2) | nc -U /tmp/pi-chrome.sock
+pi-chrome <tool> [args] [options]
+pi-chrome --help                    # Main help
+pi-chrome <group>                   # Group help (tab, scroll, page, wait)
+pi-chrome <tool> --help             # Tool help
+pi-chrome --list                    # List all 50+ tools
 ```
 
-Response format:
+### Tabs
+
+```bash
+pi-chrome tab.list
+pi-chrome tab.new "https://google.com"
+pi-chrome tab.switch 12345
+pi-chrome tab.close 12345
+```
+
+### Navigation & Screenshots
+
+```bash
+pi-chrome navigate "https://example.com"
+pi-chrome screenshot --output /tmp/shot.png
+```
+
+### Scrolling
+
+```bash
+pi-chrome scroll.top
+pi-chrome scroll.bottom
+pi-chrome scroll.info
+pi-chrome scroll.to --ref "section_1"
+```
+
+### Input
+
+```bash
+pi-chrome click --ref "btn_1"
+pi-chrome click --x 100 --y 200 --button double
+pi-chrome type --text "hello"
+pi-chrome smart_type --selector "#input" --text "hello" --submit
+pi-chrome key Enter
+pi-chrome key "cmd+a"
+
+# Method flag: switch between CDP (real events) and JS (DOM manipulation)
+pi-chrome type --text "hello" --selector "#input" --method js   # Uses smart_type
+pi-chrome click --selector ".btn" --method js                   # Uses JS click()
+```
+
+### Page Inspection
+
+```bash
+pi-chrome page.read                 # Accessibility tree
+pi-chrome page.text                 # Extract all text
+pi-chrome page.state                # Modals, loading state
+```
+
+### Waiting
+
+```bash
+pi-chrome wait 2                    # Wait 2 seconds
+pi-chrome wait.element --selector ".loaded"
+pi-chrome wait.network              # Wait for network idle
+pi-chrome wait.url --pattern "*/success*"
+```
+
+### JavaScript
+
+```bash
+pi-chrome js "return document.title"
+pi-chrome js "return document.querySelector('#btn').textContent"
+```
+
+### Options
+
+```bash
+--tab-id <id>         Target specific tab
+--json                Output raw JSON response
+```
+
+## Socket API
+
+Send JSON to `/tmp/pi-chrome.sock`:
+
+```bash
+echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list","args":{}},"id":"1"}' | nc -U /tmp/pi-chrome.sock
+```
+
+Response:
 ```json
 {"type":"tool_response","id":"1","result":{"content":[{"type":"text","text":"..."}]}}
 ```
 
-### Custom Tool: find_elements
+## Available Tools
 
-A companion tool at `~/.pi/agent/tools/find-elements/` uses an LLM to search the accessibility tree:
+### Dot-notation (preferred)
 
-1. Call `read_page` to get the tree
-2. Call `find_elements(tree, query)` with natural language query
-3. Returns matching element refs for use with `computer` tool
+| Group | Tools |
+|-------|-------|
+| `tab.*` | `list`, `new`, `switch`, `close` |
+| `scroll.*` | `top`, `bottom`, `to`, `info` |
+| `page.*` | `read`, `text`, `state` |
+| `wait.*` | `element`, `network`, `url` |
 
-## Options
+### Core Tools
 
-Access via right-click extension icon > Options, or `chrome://extensions` > Pi Agent > Details > Extension options.
+| Tool | Description |
+|------|-------------|
+| `screenshot` | Capture screenshot |
+| `navigate` | Go to URL |
+| `js` | Execute JavaScript (use `return` for values) |
+| `click` | Click by ref or coordinates |
+| `type` | Type text |
+| `smart_type` | Type into selector with contenteditable support |
+| `key` | Press key (Enter, Escape, cmd+a) |
+| `hover` | Hover over element |
+| `drag` | Drag between points |
+| `wait` | Wait N seconds |
 
-- **Clear API Keys**: Remove all stored provider API keys
-- **Debug Mode**: Enable verbose logging to console
-- **Heartbeat Interval**: How often the static indicator checks agent status (5-60 seconds)
+### Legacy Tools (still supported)
 
-## Permissions
+| Tool | Description |
+|------|-------------|
+| `list_tabs`, `new_tab`, `switch_tab`, `close_tab` | Tab management |
+| `scroll_to_position`, `get_scroll_info` | Scrolling |
+| `read_page`, `get_page_text`, `page_state` | Page inspection |
+| `wait_for_element`, `wait_for_network_idle`, `wait_for_url` | Waiting |
+| `javascript_tool` | JS execution (alias: `js`) |
+| `computer` | Anthropic computer-use format wrapper |
+| `read_console_messages`, `read_network_requests` | Dev tools |
 
-| Permission | Purpose |
-|------------|---------|
-| `sidePanel` | Side panel UI |
-| `storage`, `unlimitedStorage` | API keys and session persistence |
-| `debugger` | CDP for browser automation (mouse, keyboard, screenshots) |
-| `tabs`, `tabGroups` | Tab management and grouping |
-| `scripting` | Content script injection |
-| `webNavigation` | Detect page load completion |
-| `<all_urls>` | Access all pages for automation |
+Run `pi-chrome --list` for all 50+ tools.
+
+## Architecture
+
+```
+CLI (pi-chrome) ─────► Socket (/tmp/pi-chrome.sock) ─────► host.cjs ─────► Extension ─────► CDP
+```
 
 ## Limitations
 
-- Cannot automate `chrome://` pages, the Chrome Web Store, or other extensions
-- CDP debugger attachment shows a banner ("Chrome is being controlled by automated test software")
-- Some sites may detect automation via CDP
-- First CDP operation on a new tab takes ~5-8 seconds (debugger attachment)
-- Content scripts require page navigation after extension reload to inject
+- Cannot automate `chrome://` pages, Web Store, or other extensions
+- First CDP operation on a new tab takes ~5-8s (debugger attachment)
+- Shows "Chrome is being controlled" banner when CDP active
 
 ## Development
 
-### Key Files
+```bash
+npm run dev       # Watch mode
+npm run build     # Production build
+npm run check     # Type check
+```
 
-- `manifest.json` - Extension manifest (MV3)
-- `vite.config.ts` - Build configuration
-- `src/service-worker-loader.js` - Loads service worker as ES module
+### After code changes
 
-### Building
-
-The build outputs to `dist/` with the following structure:
-- `sidepanel/index.html` + `sidepanel/index.js` - Side panel
-- `service-worker/index.js` - Background worker
-- `content/*.js` - Content scripts
-- `options/options.html` + `options/options.js` - Options page
+- **Extension changes** (`src/`): Reload extension in `chrome://extensions`
+- **Host changes** (`native/host.cjs`): Kill existing process or reload extension
+  ```bash
+  pkill -f host.cjs
+  ```
 
 ### Debugging
 
-1. Enable debug mode in Options
-2. Open Chrome DevTools on any page
-3. Check Console for `[Pi Agent]` prefixed logs
-4. For service worker logs: `chrome://extensions` > Pi Agent > "Inspect views: service worker"
-
-## Related Files
-
-| Location | Purpose |
-|----------|---------|
-| `~/.pi/agent/tools/find-elements/` | LLM-powered element search tool |
-| `~/.pi/agent/skills/pi-chrome-browser/` | Skill file with tool reference |
-| `/tmp/pi-chrome.sock` | Unix socket for native messaging |
-
-## License
-
-Private - Not for redistribution.
+Service worker logs: `chrome://extensions` > Pi Agent > "Inspect views: service worker"

@@ -9,6 +9,8 @@ const SOCKET_PATH = "/tmp/pi-chrome.sock";
 const LOG_FILE = "/tmp/pi-chrome-host.log";
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
+
+
 async function handleApiRequest(msg, sendResponse) {
   const { url, method, headers, body, streamId } = msg;
   
@@ -152,7 +154,7 @@ function formatToolContent(result) {
       ? `${result.width}x${result.height}` 
       : "unknown dimensions";
     return [
-      { type: "text", text: `Screenshot captured (${dims})` },
+      { type: "text", text: `Screenshot (${dims})` },
       { type: "image", data: result.base64, mimeType: "image/png" }
     ];
   }
@@ -172,14 +174,26 @@ function formatToolContent(result) {
     }
     
     if (result.modalStates && result.modalStates.length > 0) {
-      output += `\n--- Active Modals ---`;
+      output += `\n\n[ACTION REQUIRED] Modal blocking page - dismiss before proceeding:`;
+      output += `\n  -> Press Escape key: computer(action="key", text="Escape")`;
       for (const modal of result.modalStates) {
-        output += `\n${modal.description} (dismiss: ${modal.clearedBy})`;
+        output += `\n  - ${modal.description}`;
       }
     }
     
     if (result.error) {
       return text(`Error: ${result.error}\n\n${output}`);
+    }
+    
+    if (result.screenshot && result.screenshot.base64) {
+      const dims = result.screenshot.width && result.screenshot.height 
+        ? `${result.screenshot.width}x${result.screenshot.height}` 
+        : "unknown";
+      return [
+        { type: "text", text: output },
+        { type: "text", text: `\n[Screenshot included (${dims})]` },
+        { type: "image", data: result.screenshot.base64, mimeType: "image/png" }
+      ];
     }
     return text(output);
   }
@@ -201,12 +215,33 @@ function formatToolContent(result) {
     return text(output);
   }
   
-  if (result.success && result.tabId) {
-    return text(`Created tab ${result.tabId}${result.url ? `: ${result.url}` : ""}`);
+  if (result.success && result.name && result.tabId !== undefined) {
+    return text(`Registered tab ${result.tabId} as "${result.name}"`);
+  }
+
+  if (result.success && result.tabId && result.title !== undefined) {
+    return text(`Switched to tab ${result.tabId}: ${result.title}`);
+  }
+
+  if (result.success && result.tabId && result.url) {
+    return text(`Created tab ${result.tabId}: ${result.url}`);
+  }
+
+  if (result.success && result.closed) {
+    return text(`Closed ${result.closed.length} tabs: ${result.closed.join(", ")}`);
+  }
+
+  if (result.success && result.tabId && !result.url) {
+    return text(`Closed tab ${result.tabId}`);
   }
 
   if (result.success && result.width && result.height) {
     return text(`Resized window to ${result.width}x${result.height}`);
+  }
+
+  if (result.autoScreenshot) {
+    const { path: ssPath } = result.autoScreenshot;
+    return text(`Screenshot saved. Read: ${ssPath}`);
   }
 
   if (result.success) {
@@ -229,10 +264,12 @@ function mapToolToMessage(tool, args, tabId) {
       return { 
         type: "READ_PAGE", 
         options: { 
-          filter: a.filter || "all",
+          filter: a.filter || "interactive",
           depth: a.depth,
           refId: a.ref_id,
-          forceFullSnapshot: a.forceFullSnapshot ?? false
+          format: a.format,
+          forceFullSnapshot: a.forceFullSnapshot ?? false,
+          includeScreenshot: a.includeScreenshot ?? false
         },
         ...baseMsg 
       };
@@ -240,10 +277,26 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "GET_PAGE_TEXT", ...baseMsg };
     case "form_input":
       return { type: "FORM_INPUT", ref: a.ref, value: a.value, ...baseMsg };
+    case "find_and_type":
+      return { type: "FIND_AND_TYPE", text: a.text, submit: a.submit ?? false, submitKey: a.submitKey || "Enter", ...baseMsg };
+    case "autocomplete":
+      return { type: "AUTOCOMPLETE_SELECT", text: a.text, ref: a.ref, coordinate: a.coordinate, index: a.index ?? 0, waitMs: a.waitMs ?? 500, ...baseMsg };
+    case "set_value":
+      return { type: "SET_INPUT_VALUE", selector: a.selector, ref: a.ref, value: a.value, ...baseMsg };
+    case "smart_type":
+      return { type: "SMART_TYPE", selector: a.selector, text: a.text, clear: a.clear ?? true, submit: a.submit ?? false, ...baseMsg };
+    case "scroll_to_position":
+      return { type: "SCROLL_TO_POSITION", position: a.position, selector: a.selector, ...baseMsg };
+    case "get_scroll_info":
+      return { type: "GET_SCROLL_INFO", selector: a.selector, ...baseMsg };
+    case "close_dialogs":
+      return { type: "CLOSE_DIALOGS", maxAttempts: a.maxAttempts ?? 3, ...baseMsg };
+    case "page_state":
+      return { type: "PAGE_STATE", ...baseMsg };
     case "tabs_context":
       return { type: "GET_TABS" };
     case "screenshot":
-      return { type: "EXECUTE_SCREENSHOT", ...baseMsg };
+      return { type: "EXECUTE_SCREENSHOT", savePath: a.savePath, ...baseMsg };
     case "javascript_tool":
       return { type: "EXECUTE_JAVASCRIPT", code: a.code, ...baseMsg };
     case "wait_for_element":
@@ -259,6 +312,12 @@ function mapToolToMessage(tool, args, tabId) {
         type: "WAIT_FOR_URL", 
         pattern: a.pattern || a.url || a.urlContains,
         timeout: a.timeout || 20000,
+        ...baseMsg 
+      };
+    case "wait_for_network_idle":
+      return { 
+        type: "WAIT_FOR_NETWORK_IDLE", 
+        timeout: a.timeout || 10000,
         ...baseMsg 
       };
     case "read_console_messages":
@@ -296,6 +355,54 @@ function mapToolToMessage(tool, args, tabId) {
       };
     case "tabs_create":
       return { type: "TABS_CREATE", url: a.url, ...baseMsg };
+    case "tabs_register":
+      return { type: "TABS_REGISTER", name: a.name, ...baseMsg };
+    case "tabs_get_by_name":
+      return { type: "TABS_GET_BY_NAME", name: a.name };
+    case "tabs_list_named":
+      return { type: "TABS_LIST_NAMED" };
+    case "tabs_unregister":
+      return { type: "TABS_UNREGISTER", name: a.name };
+    case "list_tabs":
+      return { type: "LIST_TABS" };
+    case "new_tab":
+      return { type: "NEW_TAB", url: a.url, urls: a.urls };
+    case "switch_tab":
+      return { type: "SWITCH_TAB", tabId: a.tab_id || a.tabId };
+    case "close_tab":
+      return { type: "CLOSE_TAB", tabId: a.tab_id || a.tabId, tabIds: a.tab_ids || a.tabIds };
+    case "tab.list":
+      return { type: "LIST_TABS" };
+    case "tab.new":
+      return { type: "NEW_TAB", url: a.url, urls: a.urls };
+    case "tab.switch":
+      return { type: "SWITCH_TAB", tabId: a.id || a.tab_id || a.tabId };
+    case "tab.close":
+      return { type: "CLOSE_TAB", tabId: a.id || a.tab_id || a.tabId, tabIds: a.ids || a.tab_ids || a.tabIds };
+    case "js":
+      return { type: "EXECUTE_JAVASCRIPT", code: a.code, ...baseMsg };
+    case "scroll.top":
+      return { type: "SCROLL_TO_POSITION", position: "top", selector: a.selector, ...baseMsg };
+    case "scroll.bottom":
+      return { type: "SCROLL_TO_POSITION", position: "bottom", selector: a.selector, ...baseMsg };
+    case "scroll.info":
+      return { type: "GET_SCROLL_INFO", selector: a.selector, ...baseMsg };
+    case "scroll.to":
+      return { type: "SCROLL_TO_ELEMENT", ref: a.ref, ...baseMsg };
+    case "wait.element":
+      return { type: "WAIT_FOR_ELEMENT", selector: a.selector, timeout: a.timeout, ...baseMsg };
+    case "wait.network":
+      return { type: "WAIT_FOR_NETWORK_IDLE", timeout: a.timeout, ...baseMsg };
+    case "wait.url":
+      return { type: "WAIT_FOR_URL", pattern: a.pattern || a.url, timeout: a.timeout, ...baseMsg };
+    case "page.read":
+      return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref }, ...baseMsg };
+    case "page.text":
+      return { type: "GET_PAGE_TEXT", ...baseMsg };
+    case "page.state":
+      return { type: "PAGE_STATE", ...baseMsg };
+    case "wait":
+      return { type: "LOCAL_WAIT", seconds: Math.min(30, a.duration || a.seconds || 1) };
     default:
       return null;
   }
@@ -340,6 +447,18 @@ function mapComputerAction(args, tabId) {
       }
       return { type: "EXECUTE_KEY", key: text, ...baseMsg };
     }
+    
+    case "type_submit":
+      return { type: "TYPE_SUBMIT", text, submitKey: a.submitKey || "Enter", ...baseMsg };
+    
+    case "click_type":
+      return { type: "CLICK_TYPE", text, ref, coordinate, ...baseMsg };
+    
+    case "click_type_submit":
+      return { type: "CLICK_TYPE_SUBMIT", text, ref, coordinate, submitKey: a.submitKey || "Enter", ...baseMsg };
+    
+    case "find_and_type":
+      return { type: "FIND_AND_TYPE", text, submit: a.submit ?? false, submitKey: a.submitKey || "Enter", ...baseMsg };
     
     case "scroll": {
       const amount = (scroll_amount || 3) * 100;
@@ -392,7 +511,8 @@ function handleToolRequest(msg, socket) {
     return;
   }
   
-  const { tool, args, tabId } = params || {};
+  const { tool, args } = params || {};
+  const tabId = params?.tabId || args?.tabId;
   if (!tool) {
     sendToolResponse(socket, originalId, null, "No tool specified");
     return;
@@ -448,7 +568,16 @@ function handleToolRequest(msg, socket) {
   }
   
   const id = ++requestCounter;
-  pendingToolRequests.set(id, { socket, originalId, tool });
+  const pendingData = { 
+    socket, 
+    originalId, 
+    tool, 
+    savePath: args?.savePath,
+    autoScreenshot: args?.autoScreenshot,
+    tabId: extensionMsg.tabId || tabId
+  };
+  pendingToolRequests.set(id, pendingData);
+  
   writeMessage({ ...extensionMsg, id });
 }
 
@@ -504,6 +633,7 @@ function processInput() {
         return;
       }
       
+      
       if (msg.id && pendingToolRequests.has(msg.id)) {
         const pending = pendingToolRequests.get(msg.id);
         pendingToolRequests.delete(msg.id);
@@ -511,15 +641,70 @@ function processInput() {
         if (pending.onComplete) {
           pending.onComplete(msg);
         } else {
-          const { socket, originalId } = pending;
-          const isPureError = msg.error && !msg.success && !msg.base64 && 
-                              !msg.pageContent && !msg.tabs && !msg.text &&
-                              !msg.output && !msg.messages && !msg.requests;
+          const { socket, originalId, savePath, autoScreenshot, tabId: storedTabId } = pending;
+          const tabId = storedTabId || msg._resolvedTabId;
           
-          if (isPureError) {
-            sendToolResponse(socket, originalId, null, msg.error);
+          if (savePath && msg.base64) {
+            try {
+              const dir = path.dirname(savePath);
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(savePath, Buffer.from(msg.base64, "base64"));
+              const dims = msg.width && msg.height ? `${msg.width}x${msg.height}` : "";
+              sendToolResponse(socket, originalId, { 
+                message: `Saved to ${savePath} (${dims})`
+              }, null);
+            } catch (e) {
+              sendToolResponse(socket, originalId, null, `Failed to save: ${e.message}`);
+            }
+          } else if (autoScreenshot && tabId && !msg.error && !msg.base64) {
+            
+            const screenshotId = ++requestCounter;
+            const screenshotPath = `/tmp/pi-auto-${Date.now()}.png`;
+            
+            const autoFiles = fs.readdirSync("/tmp")
+              .filter(f => f.startsWith("pi-auto-") && f.endsWith(".png"))
+              .map(f => ({ name: f, time: parseInt(f.match(/pi-auto-(\d+)\.png/)?.[1] || "0", 10) }))
+              .sort((a, b) => b.time - a.time);
+            if (autoFiles.length >= 10) {
+              autoFiles.slice(9).forEach(f => {
+                try { fs.unlinkSync(path.join("/tmp", f.name)); } catch (e) {}
+              });
+            }
+            pendingToolRequests.set(screenshotId, {
+              socket: null,
+              originalId: null,
+              tool: "screenshot",
+              onComplete: (screenshotMsg) => {
+                
+                if (screenshotMsg.base64) {
+                  try {
+                    fs.writeFileSync(screenshotPath, Buffer.from(screenshotMsg.base64, "base64"));
+                    
+                    sendToolResponse(socket, originalId, {
+                      ...msg,
+                      autoScreenshot: { path: screenshotPath, width: screenshotMsg.width, height: screenshotMsg.height }
+                    }, null);
+                  } catch (e) {
+                    
+                    sendToolResponse(socket, originalId, { ...msg, autoScreenshotError: e.message }, null);
+                  }
+                } else {
+                  
+                  sendToolResponse(socket, originalId, { ...msg, autoScreenshotError: "Failed to capture" }, null);
+                }
+              }
+            });
+            setTimeout(() => writeMessage({ type: "EXECUTE_SCREENSHOT", tabId, id: screenshotId }), 200);
           } else {
-            sendToolResponse(socket, originalId, msg, null);
+            const isPureError = msg.error && !msg.success && !msg.base64 && 
+                                !msg.pageContent && !msg.tabs && !msg.text &&
+                                !msg.output && !msg.messages && !msg.requests;
+            
+            if (isPureError) {
+              sendToolResponse(socket, originalId, null, msg.error);
+            } else {
+              sendToolResponse(socket, originalId, msg, null);
+            }
           }
         }
       } else if (msg.id && pendingRequests.has(msg.id)) {
@@ -629,7 +814,7 @@ const server = net.createServer((socket) => {
       }
     }
     for (const [id, pending] of pendingToolRequests.entries()) {
-      if (pending.socket === socket) {
+      if (pending.socket === socket && !pending.autoScreenshot) {
         pendingToolRequests.delete(id);
       }
     }
