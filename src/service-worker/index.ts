@@ -26,6 +26,156 @@ function getScreenshot(id: string): { base64: string; width: number; height: num
   return screenshotCache.get(id) || null;
 }
 
+const ELEMENT_COLORS: Record<string, string> = {
+  button: '#FF6B6B',
+  input: '#4ECDC4',
+  select: '#45B7D1',
+  a: '#96CEB4',
+  textarea: '#FF8C42',
+  default: '#DDA0DD',
+};
+
+async function annotateScreenshot(
+  screenshot: { base64: string; width: number; height: number },
+  elements: Array<{ ref: string; tag: string; bounds: { x: number; y: number; width: number; height: number } }>,
+  scale: { scaleX: number; scaleY: number }
+): Promise<{ base64: string; width: number; height: number }> {
+  const blob = base64ToBlob(screenshot.base64);
+  const bitmap = await createImageBitmap(blob);
+  
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Failed to get canvas context");
+  
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  
+  const scaleFactor = Math.min(scale.scaleX, scale.scaleY);
+  
+  for (const element of elements) {
+    const color = ELEMENT_COLORS[element.tag] || ELEMENT_COLORS.default;
+    
+    const x = Math.round(element.bounds.x * scaleFactor);
+    const y = Math.round(element.bounds.y * scaleFactor);
+    const w = Math.round(element.bounds.width * scaleFactor);
+    const h = Math.round(element.bounds.height * scaleFactor);
+    
+    if (w < 1 || h < 1) continue;
+    
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+    
+    const labelText = element.ref;
+    const fontSize = Math.max(10, Math.min(16, Math.round(canvas.width * 0.01)));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    const textWidth = ctx.measureText(labelText).width;
+    const padding = 4;
+    const labelWidth = textWidth + padding * 2;
+    const labelHeight = fontSize + padding * 2;
+    
+    let labelX = x + Math.floor((w - labelWidth) / 2);
+    let labelY = y + 2;
+    if (w < 60 || h < 30) {
+      labelY = y - labelHeight - 2 < 0 ? y + h + 2 : y - labelHeight - 2;
+    }
+    
+    labelX = Math.max(0, Math.min(canvas.width - labelWidth, labelX));
+    labelY = Math.max(0, Math.min(canvas.height - labelHeight, labelY));
+    
+    ctx.fillStyle = color;
+    ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
+    
+    ctx.fillStyle = "white";
+    ctx.textBaseline = "top";
+    ctx.fillText(labelText, labelX + padding, labelY + padding);
+  }
+  
+  const resultBlob = await canvas.convertToBlob({ type: "image/png" });
+  const base64 = await blobToBase64(resultBlob);
+  
+  return { base64, width: canvas.width, height: canvas.height };
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Failed to convert blob to base64"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function base64ToBlob(base64: string, mimeType = "image/png"): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function captureFullPage(tabId: number, maxHeight: number): Promise<{ base64: string; width: number; height: number }> {
+  const dimensionsResult = await cdp.evaluateScript(tabId, `(() => ({
+    viewportHeight: window.innerHeight,
+    totalHeight: Math.min(document.documentElement.scrollHeight, ${maxHeight}),
+    width: window.innerWidth,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    originalScrollY: window.scrollY,
+  }))()`);
+  
+  const dimensions = dimensionsResult.result?.value;
+  if (!dimensions) throw new Error("Failed to get page dimensions");
+  
+  const { viewportHeight, totalHeight, width, devicePixelRatio, originalScrollY } = dimensions;
+  const chunks: ImageBitmap[] = [];
+  let currentY = 0;
+  
+  while (currentY < totalHeight) {
+    await cdp.evaluateScript(tabId, `window.scrollTo(0, ${currentY})`);
+    await new Promise(r => setTimeout(r, 300));
+    
+    const chunk = await cdp.captureScreenshot(tabId);
+    const chunkBlob = base64ToBlob(chunk.base64);
+    chunks.push(await createImageBitmap(chunkBlob));
+    
+    currentY += viewportHeight;
+  }
+  
+  await cdp.evaluateScript(tabId, `window.scrollTo(0, ${originalScrollY})`);
+  
+  const canvasWidth = Math.round(width * devicePixelRatio);
+  const canvasHeight = Math.round(totalHeight * devicePixelRatio);
+  const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Failed to get canvas context");
+  
+  let y = 0;
+  const chunkHeight = Math.round(viewportHeight * devicePixelRatio);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const remainingHeight = canvasHeight - y;
+    const drawHeight = Math.min(chunkHeight, remainingHeight);
+    ctx.drawImage(chunk, 0, 0, chunk.width, drawHeight, 0, y, chunk.width, drawHeight);
+    y += drawHeight;
+    chunk.close();
+  }
+  
+  const resultBlob = await canvas.convertToBlob({ type: "image/png" });
+  const base64 = await blobToBase64(resultBlob);
+  
+  return { base64, width: canvasWidth, height: canvasHeight };
+}
+
 const tabGroups = new Map<number, number>();
 const navigationResolvers = new Map<number, () => void>();
 const tabNameRegistry = new Map<string, number>();
@@ -133,13 +283,47 @@ async function handleMessage(
 
     case "EXECUTE_SCREENSHOT": {
       if (!tabId) throw new Error("No tabId provided");
+      
       try {
         await chrome.tabs.sendMessage(tabId, { type: "HIDE_FOR_TOOL_USE" });
       } catch (e) {}
       await new Promise(resolve => setTimeout(resolve, 50));
       
       try {
-        const result = await cdp.captureScreenshot(tabId);
+        let result: { base64: string; width: number; height: number };
+        let scaleInfo = { scaleX: 1, scaleY: 1 };
+        
+        if (message.fullpage) {
+          result = await captureFullPage(tabId, message.maxHeight || 4000);
+          try {
+            const viewport = await cdp.getViewportSize(tabId);
+            const dpr = result.width / viewport.width;
+            scaleInfo = { scaleX: dpr, scaleY: dpr };
+          } catch {}
+        } else {
+          const rawResult = await cdp.captureScreenshot(tabId);
+          result = rawResult;
+          try {
+            const viewport = await cdp.getViewportSize(tabId);
+            scaleInfo = {
+              scaleX: rawResult.width / viewport.width,
+              scaleY: rawResult.height / viewport.height,
+            };
+          } catch {}
+        }
+        
+        if (message.annotate) {
+          try {
+            const treeResult = await chrome.tabs.sendMessage(tabId, {
+              type: "GET_ELEMENT_BOUNDS_FOR_ANNOTATION",
+            }, { frameId: 0 });
+            
+            if (treeResult?.elements && treeResult.elements.length > 0) {
+              result = await annotateScreenshot(result, treeResult.elements, scaleInfo);
+            }
+          } catch {}
+        }
+        
         const screenshotId = generateScreenshotId();
         cacheScreenshot(screenshotId, result);
         return { ...result, screenshotId };
@@ -1486,6 +1670,296 @@ async function handleMessage(
       }
 
       return { success: true };
+    }
+
+    case "SEARCH_PAGE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.term) throw new Error("Search term required");
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "SEARCH_PAGE",
+          term: message.term,
+          caseSensitive: message.caseSensitive || false,
+          limit: message.limit || 10,
+        }, { frameId: 0 });
+        return result;
+      } catch {
+        return { error: "Content script not loaded. Try refreshing the page." };
+      }
+    }
+
+    case "TAB_GROUP_CREATE": {
+      const tabIds = [...(message.tabIds || [])];
+      const name = message.name || "Pi Agent";
+      const validColors = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
+      const color = validColors.includes(message.color) ? message.color : 'blue';
+      
+      if (tabIds.length === 0 && tabId) {
+        tabIds.push(tabId);
+      }
+      
+      if (tabIds.length === 0) throw new Error("No tabs specified");
+      
+      const existingGroups = await chrome.tabGroups.query({ title: name });
+      let groupId: number;
+      
+      if (existingGroups.length > 0) {
+        groupId = existingGroups[0].id;
+        await chrome.tabs.group({ tabIds, groupId });
+      } else {
+        groupId = await chrome.tabs.group({ tabIds });
+        await chrome.tabGroups.update(groupId, {
+          title: name,
+          color: color as chrome.tabGroups.ColorEnum,
+          collapsed: false,
+        });
+      }
+      
+      return { success: true, groupId, name, tabIds };
+    }
+
+    case "TAB_GROUP_REMOVE": {
+      const tabIds = [...(message.tabIds || [])];
+      if (tabIds.length === 0 && tabId) {
+        tabIds.push(tabId);
+      }
+      
+      if (tabIds.length === 0) throw new Error("No tabs specified");
+      
+      await chrome.tabs.ungroup(tabIds);
+      return { success: true, ungrouped: tabIds };
+    }
+
+    case "TAB_GROUPS_LIST": {
+      const groups = await chrome.tabGroups.query({});
+      const result = [];
+      
+      for (const group of groups) {
+        const tabs = await chrome.tabs.query({ groupId: group.id });
+        result.push({
+          id: group.id,
+          name: group.title || "(unnamed)",
+          color: group.color,
+          collapsed: group.collapsed,
+          tabs: tabs.map(t => ({ id: t.id, title: t.title, url: t.url })),
+        });
+      }
+      
+      return { groups: result };
+    }
+
+    case "CLICK_SELECTOR": {
+      if (!tabId) throw new Error("No tabId provided");
+      const selector = message.selector;
+      const index = message.index || 0;
+      
+      const script = `(() => {
+        const elements = document.querySelectorAll(${JSON.stringify(selector)});
+        if (elements.length === 0) return { error: "No elements match selector" };
+        if (${index} >= elements.length) return { error: "Index " + ${index} + " out of range (found " + elements.length + " elements)" };
+        
+        const el = elements[${index}];
+        const rect = el.getBoundingClientRect();
+        return { 
+          x: rect.left + rect.width / 2, 
+          y: rect.top + rect.height / 2,
+          count: elements.length
+        };
+      })()`;
+      
+      const result = await cdp.evaluateScript(tabId, script);
+      const coords = result.result?.value;
+      
+      if (coords?.error) return { error: coords.error };
+      if (!coords) return { error: "Failed to get element coordinates" };
+      
+      await cdp.click(tabId, coords.x, coords.y, "left", 1, 0);
+      return { success: true, selector, index, matchCount: coords.count };
+    }
+
+    case "COOKIE_LIST": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url;
+      if (!url) throw new Error("Tab has no URL");
+      const cookies = await chrome.cookies.getAll({ url });
+      return { cookies };
+    }
+
+    case "COOKIE_GET": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url;
+      if (!url) throw new Error("Tab has no URL");
+      if (!message.name) throw new Error("Cookie name required");
+      const cookie = await chrome.cookies.get({ url, name: message.name });
+      if (!cookie) return { error: `Cookie "${message.name}" not found` };
+      return { cookie };
+    }
+
+    case "COOKIE_SET": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url;
+      if (!url) throw new Error("Tab has no URL");
+      if (!message.name) throw new Error("Cookie name required");
+      if (message.value === undefined) throw new Error("Cookie value required");
+      
+      const cookieDetails: chrome.cookies.SetDetails = {
+        url,
+        name: message.name,
+        value: message.value,
+      };
+      
+      if (message.expires) {
+        const expirationDate = new Date(message.expires).getTime() / 1000;
+        if (isNaN(expirationDate)) {
+          throw new Error(`Invalid expiration date: ${message.expires}`);
+        }
+        cookieDetails.expirationDate = expirationDate;
+      }
+      
+      const result = await chrome.cookies.set(cookieDetails);
+      return { success: true, cookie: result };
+    }
+
+    case "COOKIE_CLEAR": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url;
+      if (!url) throw new Error("Tab has no URL");
+      if (!message.name) throw new Error("Cookie name required");
+      
+      await chrome.cookies.remove({ url, name: message.name });
+      return { success: true, cleared: message.name };
+    }
+
+    case "COOKIE_CLEAR_ALL": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url;
+      if (!url) throw new Error("Tab has no URL");
+      
+      const cookies = await chrome.cookies.getAll({ url });
+      for (const cookie of cookies) {
+        await chrome.cookies.remove({ url, name: cookie.name });
+      }
+      return { success: true, cleared: cookies.length };
+    }
+
+    case "TAB_RELOAD": {
+      if (!tabId) throw new Error("No tabId provided");
+      await chrome.tabs.reload(tabId, { bypassCache: message.hard || false });
+      return { success: true };
+    }
+
+    case "ZOOM_GET": {
+      if (!tabId) throw new Error("No tabId provided");
+      const zoom = await chrome.tabs.getZoom(tabId);
+      return { zoom };
+    }
+
+    case "ZOOM_SET": {
+      if (!tabId) throw new Error("No tabId provided");
+      const level = message.level;
+      if (level < 0.25 || level > 5) throw new Error("Zoom level must be between 0.25 and 5");
+      await chrome.tabs.setZoom(tabId, level);
+      return { success: true, zoom: level };
+    }
+
+    case "ZOOM_RESET": {
+      if (!tabId) throw new Error("No tabId provided");
+      await chrome.tabs.setZoom(tabId, 0);
+      return { success: true, zoom: 1.0 };
+    }
+
+    case "BOOKMARK_ADD": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      const createProps: { title: string; url?: string; parentId?: string } = {
+        title: tab.title || "Untitled",
+        url: tab.url,
+      };
+      if (message.folder) {
+        const search = await chrome.bookmarks.search({ title: message.folder });
+        const folder = search.find(b => !b.url);
+        if (folder) {
+          createProps.parentId = folder.id;
+        }
+      }
+      const bookmark = await chrome.bookmarks.create(createProps);
+      return { success: true, bookmark: { id: bookmark.id, title: bookmark.title, url: bookmark.url } };
+    }
+
+    case "BOOKMARK_REMOVE": {
+      if (!tabId) throw new Error("No tabId provided");
+      const tab = await chrome.tabs.get(tabId);
+      if (!tab.url) throw new Error("Tab has no URL");
+      const bookmarks = await chrome.bookmarks.search({ url: tab.url });
+      if (bookmarks.length === 0) throw new Error("No bookmark found for this URL");
+      await chrome.bookmarks.remove(bookmarks[0].id);
+      return { success: true };
+    }
+
+    case "BOOKMARK_LIST": {
+      const limit = typeof message.limit === 'number' ? message.limit : 50;
+      let bookmarks: chrome.bookmarks.BookmarkTreeNode[] = [];
+      
+      if (message.folder) {
+        const search = await chrome.bookmarks.search({ title: message.folder });
+        const folder = search.find(b => !b.url);
+        if (folder) {
+          const children = await chrome.bookmarks.getChildren(folder.id);
+          bookmarks = children.filter(b => b.url).slice(0, limit);
+        }
+      } else {
+        const recent = await chrome.bookmarks.getRecent(limit);
+        bookmarks = recent;
+      }
+      
+      return { 
+        bookmarks: bookmarks.map(b => ({ 
+          id: b.id, 
+          title: b.title, 
+          url: b.url,
+          dateAdded: b.dateAdded
+        }))
+      };
+    }
+
+    case "HISTORY_LIST": {
+      const limit = typeof message.limit === 'number' ? message.limit : 20;
+      const items = await chrome.history.search({ 
+        text: "", 
+        maxResults: limit,
+        startTime: 0 
+      });
+      return { 
+        history: items.map(h => ({ 
+          url: h.url, 
+          title: h.title, 
+          lastVisitTime: h.lastVisitTime,
+          visitCount: h.visitCount
+        }))
+      };
+    }
+
+    case "HISTORY_SEARCH": {
+      const query = message.query;
+      const limit = typeof message.limit === 'number' ? message.limit : 20;
+      const items = await chrome.history.search({ 
+        text: query, 
+        maxResults: limit,
+        startTime: 0 
+      });
+      return { 
+        history: items.map(h => ({ 
+          url: h.url, 
+          title: h.title, 
+          lastVisitTime: h.lastVisitTime,
+          visitCount: h.visitCount
+        }))
+      };
     }
 
     default:

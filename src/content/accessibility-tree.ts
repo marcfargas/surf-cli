@@ -1435,7 +1435,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ error: `Element ${message.ref} not found. Use read_page to get current elements.` });
         break;
       }
-      if (message.button === "double") {
+      if (message.button === "triple") {
+        const tripleClick = new MouseEvent("click", { bubbles: true, cancelable: true, view: window, detail: 3 });
+        element.dispatchEvent(tripleClick);
+      } else if (message.button === "double") {
         element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
       } else if (message.button === "right") {
         element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: window }));
@@ -1855,8 +1858,107 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
     }
+    case "SEARCH_PAGE": {
+      const { term, caseSensitive, limit } = message;
+      const matches = searchPageText(term, caseSensitive || false, limit || 10);
+      sendResponse({ query: term, count: matches.length, matches });
+      break;
+    }
+    case "GET_ELEMENT_BOUNDS_FOR_ANNOTATION": {
+      const elementMap = getElementMap();
+      const elements: Array<{ ref: string; tag: string; bounds: { x: number; y: number; width: number; height: number } }> = [];
+      
+      for (const [ref, entry] of Object.entries(elementMap)) {
+        const el = entry.element.deref();
+        if (!el) continue;
+        
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+        if (rect.right < 0 || rect.left > window.innerWidth) continue;
+        
+        elements.push({
+          ref,
+          tag: el.tagName.toLowerCase(),
+          bounds: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+        });
+      }
+      
+      sendResponse({ elements });
+      break;
+    }
     default:
       return false;
   }
   return false;
 });
+
+function searchPageText(term: string, caseSensitive: boolean, limit: number) {
+  const matches: Array<{
+    ref: string;
+    text: string;
+    context: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    elementRef: string | null;
+  }> = [];
+  
+  const searchTerm = caseSensitive ? term : term.toLowerCase();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const elementMap = getElementMap();
+  let matchIndex = 0;
+  
+  while (walker.nextNode() && matches.length < limit) {
+    const node = walker.currentNode;
+    const textContent = node.textContent || "";
+    const searchIn = caseSensitive ? textContent : textContent.toLowerCase();
+    
+    let pos = 0;
+    while ((pos = searchIn.indexOf(searchTerm, pos)) !== -1 && matches.length < limit) {
+      const parent = node.parentElement;
+      if (!parent) { pos++; continue; }
+      
+      const range = document.createRange();
+      range.setStart(node, pos);
+      range.setEnd(node, Math.min(pos + term.length, textContent.length));
+      const rect = range.getBoundingClientRect();
+      
+      if (rect.width === 0 || rect.height === 0) { pos++; continue; }
+      
+      const fullText = node.textContent || "";
+      const contextStart = Math.max(0, pos - 30);
+      const contextEnd = Math.min(fullText.length, pos + term.length + 30);
+      const context = fullText.slice(contextStart, contextEnd).trim();
+      
+      let elementRef: string | null = null;
+      for (const [ref, entry] of Object.entries(elementMap)) {
+        const el = entry.element.deref();
+        if (el && (el === parent || el.contains(parent))) {
+          elementRef = ref;
+          break;
+        }
+      }
+      
+      matches.push({
+        ref: `m${++matchIndex}`,
+        text: fullText.slice(pos, pos + term.length),
+        context,
+        bounds: {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        },
+        elementRef,
+      });
+      
+      pos++;
+    }
+  }
+  
+  return matches;
+}

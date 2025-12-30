@@ -52,7 +52,10 @@
     "system.display",
     "webNavigation",
     "nativeMessaging",
-    "downloads"
+    "downloads",
+    "cookies",
+    "bookmarks",
+    "history"
   ],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {

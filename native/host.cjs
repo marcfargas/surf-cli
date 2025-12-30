@@ -341,6 +341,84 @@ function formatToolContent(result) {
   if (result.tabs) {
     return text(JSON.stringify(result.tabs, null, 2));
   }
+
+  if (result.cookies && Array.isArray(result.cookies)) {
+    return text(JSON.stringify(result.cookies, null, 2));
+  }
+
+  if (result.cookie) {
+    return text(JSON.stringify(result.cookie, null, 2));
+  }
+
+  if (result.cleared !== undefined) {
+    if (typeof result.cleared === "number") {
+      return text(`Cleared ${result.cleared} cookies`);
+    }
+    return text(`Cleared cookie: ${result.cleared}`);
+  }
+
+  if (result.query !== undefined && result.matches) {
+    const header = `Found ${result.count} matches for "${result.query}":`;
+    if (result.matches.length === 0) return text(header);
+    const matchList = result.matches.map(m => 
+      `  ${m.ref}: "${m.text}" in "...${m.context}..."${m.elementRef ? ` [${m.elementRef}]` : ""}`
+    ).join("\n");
+    return text(`${header}\n${matchList}`);
+  }
+
+  if (result.groupId !== undefined && result.name !== undefined) {
+    return text(`Tab group "${result.name}" (id: ${result.groupId}) with tabs: ${(result.tabIds || []).join(", ")}`);
+  }
+
+  if (result.ungrouped) {
+    return text(`Ungrouped tabs: ${result.ungrouped.join(", ")}`);
+  }
+
+  if (result.groups && Array.isArray(result.groups)) {
+    if (result.groups.length === 0) return text("No tab groups");
+    const formatted = result.groups.map(g => {
+      const tabList = g.tabs.map(t => `    ${t.id}: ${t.title}`).join("\n");
+      return `${g.name} (${g.color}, ${g.tabs.length} tabs):\n${tabList}`;
+    }).join("\n\n");
+    return text(formatted);
+  }
+
+  if (result.completedActions !== undefined && result.totalActions !== undefined) {
+    const status = result.success ? "SUCCESS" : "FAILED";
+    const header = `Batch ${status}: ${result.completedActions}/${result.totalActions} actions completed`;
+    if (result.results && result.results.length > 0) {
+      const details = result.results.map(r => 
+        `  [${r.index}] ${r.type}: ${r.success ? "OK" : "FAILED"}${r.error ? ` - ${r.error}` : ""}`
+      ).join("\n");
+      return text(`${header}\n${details}${result.error ? `\n\nError: ${result.error}` : ""}`);
+    }
+    return text(header);
+  }
+
+  if (result.zoom !== undefined) {
+    return text(`Zoom: ${Math.round(result.zoom * 100)}%`);
+  }
+
+  if (result.bookmarks && Array.isArray(result.bookmarks)) {
+    if (result.bookmarks.length === 0) return text("No bookmarks");
+    const formatted = result.bookmarks.map(b => 
+      `${b.title}\n  ${b.url}`
+    ).join("\n\n");
+    return text(formatted);
+  }
+
+  if (result.bookmark && result.bookmark.id) {
+    return text(`Bookmarked: ${result.bookmark.title}\n  ${result.bookmark.url}`);
+  }
+
+  if (result.history && Array.isArray(result.history)) {
+    if (result.history.length === 0) return text("No history");
+    const formatted = result.history.map(h => {
+      const date = h.lastVisitTime ? new Date(h.lastVisitTime).toLocaleString() : "unknown";
+      return `${h.title || "(no title)"}\n  ${h.url}\n  Last visited: ${date}`;
+    }).join("\n\n");
+    return text(formatted);
+  }
   
   if (result.text !== undefined) {
     const textContent = result.text || "No text content";
@@ -449,7 +527,14 @@ function mapToolToMessage(tool, args, tabId) {
     case "tabs_context":
       return { type: "GET_TABS" };
     case "screenshot":
-      return { type: "EXECUTE_SCREENSHOT", savePath: a.savePath, ...baseMsg };
+      return { 
+        type: "EXECUTE_SCREENSHOT", 
+        savePath: a.savePath,
+        annotate: a.annotate || false,
+        fullpage: a.fullpage || false,
+        maxHeight: a["max-height"] || 4000,
+        ...baseMsg 
+      };
     case "javascript_tool":
       return { type: "EXECUTE_JAVASCRIPT", code: a.code, ...baseMsg };
     case "wait_for_element":
@@ -578,6 +663,7 @@ function mapToolToMessage(tool, args, tabId) {
     case "dialog.accept":
       return { type: "DIALOG_ACCEPT", text: a.text, ...baseMsg };
     case "dialog.dismiss":
+      if (a.all) return { type: "CLOSE_DIALOGS", maxAttempts: a.maxAttempts || 3, ...baseMsg };
       return { type: "DIALOG_DISMISS", ...baseMsg };
     case "dialog.info":
       return { type: "DIALOG_INFO", ...baseMsg };
@@ -591,13 +677,13 @@ function mapToolToMessage(tool, args, tabId) {
         return { type: "EMULATE_GEO", clear: true, ...baseMsg };
       }
       if (a.lat === undefined || a.lon === undefined) {
-        throw new Error("--lat and --lon are required for emulate.geo");
+        throw new Error("--lat and --lon required");
       }
       return { type: "EMULATE_GEO", latitude: parseFloat(a.lat), longitude: parseFloat(a.lon), accuracy: parseFloat(a.accuracy) || 100, ...baseMsg };
     case "form.fill":
       let fillData = a.data;
       if (typeof fillData === "string") {
-        try { fillData = JSON.parse(fillData); } catch (e) { throw new Error("Invalid JSON for --data"); }
+        try { fillData = JSON.parse(fillData); } catch (e) { throw new Error("invalid --data JSON"); }
       }
       return { type: "FORM_FILL", data: fillData, ...baseMsg };
     case "perf.start":
@@ -625,7 +711,7 @@ function mapToolToMessage(tool, args, tabId) {
       } else if (a.selector) {
         return { type: "WAIT_FOR_ELEMENT", selector: a.selector, timeout: a.timeout || 30000, ...baseMsg };
       }
-      return { type: "ERROR", error: "health requires --url or --selector" };
+      return { type: "ERROR", error: "--url or --selector required" };
     case "smoke":
       return { 
         type: "SMOKE_TEST", 
@@ -647,6 +733,84 @@ function mapToolToMessage(tool, args, tabId) {
       return mapComputerAction({ ...a, action: tool }, tabId);
     case "click":
       return mapComputerAction({ ...a, action: "left_click" }, tabId);
+    case "cookie.list":
+      return { type: "COOKIE_LIST", ...baseMsg };
+    case "cookie.get":
+      if (!a.name) throw new Error("--name required");
+      return { type: "COOKIE_GET", name: a.name, ...baseMsg };
+    case "cookie.set":
+      if (!a.name) throw new Error("--name required");
+      if (a.value === undefined) throw new Error("--value required");
+      return { type: "COOKIE_SET", name: a.name, value: a.value, expires: a.expires, ...baseMsg };
+    case "cookie.clear":
+      if (a.all) return { type: "COOKIE_CLEAR_ALL", ...baseMsg };
+      if (!a.name) throw new Error("--name or --all required");
+      return { type: "COOKIE_CLEAR", name: a.name, ...baseMsg };
+    case "search":
+      if (!a.term) throw new Error("search term required");
+      return { type: "SEARCH_PAGE", term: a.term, caseSensitive: a["case-sensitive"] || false, limit: a.limit || 10, ...baseMsg };
+    case "tab.group": {
+      const tabIds = a.tabs ? String(a.tabs).split(",").map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id)) : [];
+      return { type: "TAB_GROUP_CREATE", name: a.name, tabIds, color: a.color || "blue", ...baseMsg };
+    }
+    case "tab.ungroup": {
+      const tabIds = a.tabs ? String(a.tabs).split(",").map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id)) : [];
+      return { type: "TAB_GROUP_REMOVE", tabIds, ...baseMsg };
+    }
+    case "tab.groups":
+      return { type: "TAB_GROUPS_LIST" };
+    case "batch": {
+      let actions = a.actions;
+      
+      if (a.file) {
+        if (!fs.existsSync(a.file)) {
+          throw new Error(`file not found: ${a.file}`);
+        }
+        const content = fs.readFileSync(a.file, "utf8");
+        try {
+          actions = JSON.parse(content);
+        } catch (e) {
+          throw new Error(`invalid JSON in ${a.file}`);
+        }
+      }
+      
+      if (typeof actions === "string") {
+        try {
+          actions = JSON.parse(actions);
+        } catch (e) {
+          throw new Error("invalid --actions JSON");
+        }
+      }
+      
+      if (!Array.isArray(actions)) {
+        throw new Error("actions must be array");
+      }
+      
+      return { type: "BATCH_EXECUTE", actions, ...baseMsg };
+    }
+    case "back":
+      return { type: "EXECUTE_JAVASCRIPT", code: "history.back()", ...baseMsg };
+    case "forward":
+      return { type: "EXECUTE_JAVASCRIPT", code: "history.forward()", ...baseMsg };
+    case "tab.reload":
+      return { type: "TAB_RELOAD", hard: a.hard || false, ...baseMsg };
+    case "zoom":
+      if (a.reset) return { type: "ZOOM_RESET", ...baseMsg };
+      if (a.level !== undefined) return { type: "ZOOM_SET", level: parseFloat(a.level), ...baseMsg };
+      return { type: "ZOOM_GET", ...baseMsg };
+    case "resize":
+      return { type: "RESIZE_WINDOW", width: a.width, height: a.height, ...baseMsg };
+    case "bookmark.add":
+      return { type: "BOOKMARK_ADD", folder: a.folder, ...baseMsg };
+    case "bookmark.remove":
+      return { type: "BOOKMARK_REMOVE", ...baseMsg };
+    case "bookmark.list":
+      return { type: "BOOKMARK_LIST", folder: a.folder, limit: a.limit !== undefined ? parseInt(a.limit, 10) : 50 };
+    case "history.list":
+      return { type: "HISTORY_LIST", limit: a.limit !== undefined ? parseInt(a.limit, 10) : 20 };
+    case "history.search":
+      if (!a.query) throw new Error("query required");
+      return { type: "HISTORY_SEARCH", query: a.query, limit: a.limit !== undefined ? parseInt(a.limit, 10) : 20 };
     default:
       return null;
   }
@@ -669,6 +833,7 @@ function mapComputerAction(args, tabId) {
     
     case "left_click":
       if (ref) return { type: "CLICK_REF", ref, button: "left", ...baseMsg };
+      if (a.selector) return { type: "CLICK_SELECTOR", selector: a.selector, index: a.index || 0, button: "left", ...baseMsg };
       return { type: "EXECUTE_CLICK", x: coordinate?.[0], y: coordinate?.[1], modifiers, ...baseMsg };
     
     case "right_click":
@@ -680,6 +845,7 @@ function mapComputerAction(args, tabId) {
       return { type: "EXECUTE_DOUBLE_CLICK", x: coordinate?.[0], y: coordinate?.[1], modifiers, ...baseMsg };
     
     case "triple_click":
+      if (ref) return { type: "CLICK_REF", ref, button: "triple", ...baseMsg };
       return { type: "EXECUTE_TRIPLE_CLICK", x: coordinate?.[0], y: coordinate?.[1], modifiers, ...baseMsg };
     
     case "type":
@@ -741,7 +907,9 @@ function mapComputerAction(args, tabId) {
       return { type: "LOCAL_WAIT", seconds: Math.min(30, duration || 1) };
     
     case "zoom":
-      return { type: "UNSUPPORTED_ACTION", action: "zoom", message: "zoom action not yet implemented" };
+      if (a.reset) return { type: "ZOOM_RESET", tabId };
+      if (a.level !== undefined) return { type: "ZOOM_SET", level: parseFloat(a.level), tabId };
+      return { type: "ZOOM_GET", tabId };
     
     default:
       return { type: "UNSUPPORTED_ACTION", action, message: `Unknown computer action: ${action}` };
@@ -804,6 +972,11 @@ function handleToolRequest(msg, socket) {
     setTimeout(() => {
       sendToolResponse(socket, originalId, { success: true }, null);
     }, extensionMsg.seconds * 1000);
+    return;
+  }
+  
+  if (extensionMsg.type === "BATCH_EXECUTE") {
+    executeBatch(extensionMsg.actions, extensionMsg.tabId, socket, originalId);
     return;
   }
   
@@ -927,6 +1100,111 @@ function handleToolRequest(msg, socket) {
   pendingToolRequests.set(id, pendingData);
   
   writeMessage({ ...extensionMsg, id });
+}
+
+function executeBatch(actions, tabId, socket, originalId) {
+  const results = [];
+  const DELAY_MS = 100;
+  let currentIndex = 0;
+  
+  function executeNextAction() {
+    if (currentIndex >= actions.length) {
+      sendToolResponse(socket, originalId, {
+        success: true,
+        completedActions: actions.length,
+        totalActions: actions.length,
+        results,
+      }, null);
+      return;
+    }
+    
+    const action = actions[currentIndex];
+    const toolName = mapBatchActionToTool(action);
+    const toolArgs = mapBatchActionToArgs(action);
+    
+    const extensionMsg = mapToolToMessage(toolName, toolArgs, tabId);
+    if (!extensionMsg || extensionMsg.type === "UNSUPPORTED_ACTION") {
+      results.push({ index: currentIndex, type: action.type, success: false, error: "Unsupported action" });
+      sendToolResponse(socket, originalId, {
+        success: false,
+        completedActions: currentIndex,
+        totalActions: actions.length,
+        results,
+        error: `Action ${currentIndex} failed: Unsupported action type "${action.type}"`,
+      }, null);
+      return;
+    }
+    
+    if (extensionMsg.type === "LOCAL_WAIT") {
+      results.push({ index: currentIndex, type: action.type, success: true });
+      currentIndex++;
+      setTimeout(executeNextAction, extensionMsg.seconds * 1000);
+      return;
+    }
+    
+    const id = ++requestCounter;
+    pendingToolRequests.set(id, {
+      socket: null,
+      originalId: null,
+      tool: toolName,
+      onComplete: (result) => {
+        if (result.error) {
+          results.push({ index: currentIndex, type: action.type, success: false, error: result.error });
+          sendToolResponse(socket, originalId, {
+            success: false,
+            completedActions: currentIndex,
+            totalActions: actions.length,
+            results,
+            error: `Action ${currentIndex} failed: ${result.error}`,
+          }, null);
+          return;
+        }
+        
+        results.push({ index: currentIndex, type: action.type, success: true });
+        currentIndex++;
+        
+        setTimeout(executeNextAction, DELAY_MS);
+      }
+    });
+    
+    writeMessage({ ...extensionMsg, id });
+  }
+  
+  executeNextAction();
+}
+
+function mapBatchActionToTool(action) {
+  const map = {
+    click: "left_click",
+    type: "type",
+    key: "key",
+    wait: "wait",
+    scroll: "scroll",
+    screenshot: "screenshot",
+    navigate: "navigate",
+  };
+  return map[action.type] || action.type;
+}
+
+function mapBatchActionToArgs(action) {
+  switch (action.type) {
+    case "click":
+      return { ref: action.ref, selector: action.selector, x: action.x, y: action.y };
+    case "type":
+      return { text: action.text };
+    case "key":
+      return { key: action.key };
+    case "wait":
+      return { duration: (action.ms || 1000) / 1000 };
+    case "scroll":
+      return { scroll_direction: action.direction };
+    case "screenshot":
+      return { savePath: action.output };
+    case "navigate":
+      return { url: action.url };
+    default:
+      return action;
+  }
 }
 
 function writeMessage(msg) {

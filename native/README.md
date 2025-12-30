@@ -13,7 +13,7 @@ Pi-Agent → Unix Socket (/tmp/pi-chrome.sock) → Native Host (host.cjs) → Ch
 | File | Purpose |
 |------|---------|
 | `host.cjs` | Main native host with socket server and tool request handling |
-| `cli.cjs` | CLI tool for testing socket communication |
+| `cli.cjs` | CLI tool for direct browser automation |
 | `protocol.cjs` | Chrome native messaging protocol helpers |
 | `host-wrapper.py` | Python wrapper for native host execution |
 | `host.sh` | Shell script to start the host |
@@ -22,7 +22,6 @@ Pi-Agent → Unix Socket (/tmp/pi-chrome.sock) → Native Host (host.cjs) → Ch
 
 1. Install the native host manifest:
 ```bash
-# The manifest points Chrome to the host executable
 mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
 cat > ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.pi_chrome.json << EOF
 {
@@ -41,6 +40,99 @@ node host.cjs
 ```
 
 The host creates a Unix socket at `/tmp/pi-chrome.sock`.
+
+## CLI Usage
+
+```bash
+pi-chrome <command> [args] [options]
+```
+
+### Common Commands
+
+| Command | Description |
+|---------|-------------|
+| `navigate <url>` | Go to URL (alias: `go`) |
+| `click <ref>` | Click element by ref or coordinates |
+| `type <text>` | Type text at cursor or into element |
+| `screenshot` | Capture screenshot (alias: `snap`) |
+| `page.read` | Get page accessibility tree (alias: `read`) |
+| `search <term>` | Search for text in page (alias: `find`) |
+
+### Navigation
+
+```bash
+pi-chrome go "https://example.com"
+pi-chrome back
+pi-chrome forward
+pi-chrome tab.reload --hard
+```
+
+### Page Interaction
+
+```bash
+pi-chrome read                           # Get interactive elements
+pi-chrome click e5                       # Click by element ref
+pi-chrome click --selector ".btn"        # Click by CSS selector
+pi-chrome click 100 200                  # Click by coordinates
+pi-chrome type "hello" --submit          # Type and press Enter
+pi-chrome key Escape                     # Press key
+```
+
+### Screenshots
+
+```bash
+pi-chrome screenshot --output /tmp/shot.png
+pi-chrome screenshot --annotate --output /tmp/labeled.png
+pi-chrome screenshot --fullpage --output /tmp/full.png
+pi-chrome snap                           # Auto-saves to /tmp
+```
+
+### Tabs
+
+```bash
+pi-chrome tab.list
+pi-chrome tab.new "https://example.com"
+pi-chrome tab.switch 123
+pi-chrome tab.close 123
+pi-chrome tab.group --name "Work" --color blue
+```
+
+### Cookies
+
+```bash
+pi-chrome cookie.list
+pi-chrome cookie.get --name "session"
+pi-chrome cookie.set --name "foo" --value "bar"
+pi-chrome cookie.clear --all
+```
+
+### Bookmarks & History
+
+```bash
+pi-chrome bookmark.add
+pi-chrome bookmark.list --limit 20
+pi-chrome history.list --limit 10
+pi-chrome history.search "github"
+```
+
+### Other
+
+```bash
+pi-chrome zoom 1.5                       # Set zoom to 150%
+pi-chrome resize --width 1280 --height 720
+pi-chrome wait 2                         # Wait 2 seconds
+pi-chrome js "return document.title"     # Execute JavaScript
+```
+
+### Help
+
+```bash
+pi-chrome --help                         # Basic help
+pi-chrome --help-full                    # All commands
+pi-chrome <command> --help               # Command details
+pi-chrome --find <query>                 # Search commands
+pi-chrome --about refs                   # Topic guide
+```
 
 ## Protocol
 
@@ -98,38 +190,6 @@ The host creates a Unix socket at `/tmp/pi-chrome.sock`.
     "content": [{ "type": "text", "text": "Error message" }]
   }
 }
-```
-
-## Available Tools
-
-| Tool | Args | Description |
-|------|------|-------------|
-| `tabs_context` | - | Get all open tabs |
-| `navigate` | `tabId`, `url` | Navigate to URL or back/forward |
-| `read_page` | `tabId`, `filter?` | Get accessibility tree |
-| `screenshot` | `tabId` | Capture page screenshot |
-| `computer` | `tabId`, `action`, ... | Mouse/keyboard actions |
-| `form_input` | `tabId`, `ref`, `value` | Set form field value |
-| `get_page_text` | `tabId` | Extract page text |
-| `javascript_tool` | `tabId`, `code` | Execute JavaScript via CDP |
-| `read_console_messages` | `tabId`, `pattern?` | Read console output |
-| `read_network_requests` | `tabId`, `urlPattern?` | Read network requests |
-| `upload_image` | `tabId`, `imageId`, `ref`/`coordinate` | Upload image |
-| `resize_window` | `tabId`, `width`, `height` | Resize browser window |
-| `tabs_create` | - | Create new tab |
-
-## Testing
-
-Using netcat:
-```bash
-(echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tabs_context","args":{}},"id":"1"}'; sleep 2) | nc -U /tmp/pi-chrome.sock
-```
-
-Using the CLI:
-```bash
-node cli.cjs tabs_context
-node cli.cjs screenshot --tabId 123
-node cli.cjs read_page --tabId 123 --filter interactive
 ```
 
 ## Troubleshooting

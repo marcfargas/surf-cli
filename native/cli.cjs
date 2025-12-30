@@ -5,39 +5,193 @@ const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs
 
 const SOCKET_PATH = "/tmp/pi-chrome.sock";
 const args = process.argv.slice(2);
+const VERSION = "2.0.0";
+
+const ALIASES = {
+  snap: "screenshot",
+  read: "page.read",
+  find: "search",
+  go: "navigate",
+};
+
+const REMOVED_COMMANDS = {
+  read_page: "page.read",
+  get_page_text: "page.text",
+  page_state: "page.state",
+  list_tabs: "tab.list",
+  new_tab: "tab.new",
+  switch_tab: "tab.switch",
+  close_tab: "tab.close",
+  scroll_to: "scroll.to",
+  scroll_to_position: "scroll.to",
+  get_scroll_info: "scroll.info",
+  wait_for_element: "wait.element",
+  wait_for_url: "wait.url",
+  wait_for_network_idle: "wait.network",
+  javascript_tool: "js",
+  read_console_messages: "console",
+  read_network_requests: "network",
+  tabs_context: "tab.list",
+  tabs_create: "tab.new",
+  tabs_register: "tab.name",
+  tabs_unregister: "tab.unname",
+  tabs_get_by_name: "tab.switch",
+  tabs_list_named: "tab.named",
+  upload_image: "upload",
+  resize_window: "resize",
+  type_submit: "type --submit",
+  left_click: "click",
+  right_click: "click --button right",
+  double_click: "click --button double",
+  triple_click: "click --button triple",
+  left_click_drag: "drag",
+};
 
 const TOOLS = {
   ai: {
     desc: "AI-powered page analysis",
     commands: {
-      "ai": { desc: "Analyze page with AI", args: ["query"], opts: { mode: "Query mode: find|summary|extract (auto-detected)" } },
+      "ai": { 
+        desc: "Analyze page with AI", 
+        args: ["query"], 
+        opts: { mode: "Query mode: find|summary|extract (auto-detected)" },
+        examples: [
+          { cmd: 'ai "find the login button"', desc: "Find element" },
+          { cmd: 'ai "summarize this page"', desc: "Get summary" },
+          { cmd: 'ai "extract all links as json"', desc: "Extract data" },
+        ]
+      },
     }
   },
   tab: {
     desc: "Tab management",
     commands: {
-      "tab.list": { desc: "List all open tabs", args: [] },
-      "tab.new": { desc: "Open new tab", args: ["url"], opts: { urls: "Open multiple URLs" } },
-      "tab.switch": { desc: "Switch to tab by ID or name", args: ["id"] },
-      "tab.close": { desc: "Close tab by ID or name", args: ["id"], opts: { ids: "Close multiple tabs" } },
-      "tab.name": { desc: "Register current tab with a name", args: ["name"] },
+      "tab.list": { desc: "List all open tabs", args: [], examples: [{ cmd: "tab.list", desc: "Show all tabs" }] },
+      "tab.new": { 
+        desc: "Open new tab", 
+        args: ["url"], 
+        opts: { urls: "Open multiple URLs" },
+        examples: [
+          { cmd: 'tab.new "https://google.com"', desc: "Open single tab" },
+          { cmd: 'tab.new --urls "https://a.com" "https://b.com"', desc: "Open multiple" },
+        ]
+      },
+      "tab.switch": { 
+        desc: "Switch to tab by ID or name", 
+        args: ["id"],
+        examples: [
+          { cmd: "tab.switch 123", desc: "Switch by ID" },
+          { cmd: 'tab.switch "myTab"', desc: "Switch by name" },
+        ]
+      },
+      "tab.close": { 
+        desc: "Close tab by ID or name", 
+        args: ["id"], 
+        opts: { ids: "Close multiple tabs" },
+        examples: [{ cmd: "tab.close 123", desc: "Close tab" }]
+      },
+      "tab.name": { 
+        desc: "Register current tab with a name", 
+        args: ["name"],
+        examples: [{ cmd: 'tab.name "dashboard"', desc: "Name current tab" }]
+      },
       "tab.unname": { desc: "Unregister a named tab", args: ["name"] },
       "tab.named": { desc: "List all named tabs", args: [] },
+      "tab.group": { 
+        desc: "Create/add to tab group", 
+        args: [], 
+        opts: { name: "Group name", tabs: "Tab IDs (comma-separated)", color: "Group color" },
+        examples: [
+          { cmd: 'tab.group --name "Work" --color blue', desc: "Group current tab" },
+          { cmd: 'tab.group --name "Research" --tabs 1,2,3', desc: "Group multiple" },
+        ]
+      },
+      "tab.ungroup": { desc: "Remove tabs from group", args: [], opts: { tabs: "Tab IDs (comma-separated)" } },
+      "tab.groups": { desc: "List all tab groups", args: [] },
+      "tab.reload": { 
+        desc: "Reload current tab", 
+        args: [], 
+        opts: { hard: "Bypass cache" },
+        examples: [
+          { cmd: "tab.reload", desc: "Soft reload" },
+          { cmd: "tab.reload --hard", desc: "Hard reload (bypass cache)" },
+        ]
+      },
+    }
+  },
+  nav: {
+    desc: "Navigation",
+    commands: {
+      "navigate": { 
+        desc: "Go to URL", 
+        args: ["url"],
+        examples: [{ cmd: 'navigate "https://example.com"', desc: "Go to URL" }]
+      },
+      "go": { desc: "Alias for navigate", args: ["url"], alias: "navigate" },
+      "back": { 
+        desc: "Go back in history", 
+        args: [],
+        examples: [{ cmd: "back", desc: "Browser back" }]
+      },
+      "forward": { 
+        desc: "Go forward in history", 
+        args: [],
+        examples: [{ cmd: "forward", desc: "Browser forward" }]
+      },
+      "screenshot": { 
+        desc: "Capture screenshot", 
+        args: [], 
+        opts: { 
+          output: "Save to file", 
+          selector: "Capture specific element", 
+          annotate: "Draw element labels", 
+          fullpage: "Capture full page", 
+          "max-height": "Max height for fullpage (default: 4000)" 
+        },
+        examples: [
+          { cmd: "screenshot --output /tmp/shot.png", desc: "Save to file" },
+          { cmd: "screenshot --annotate --output /tmp/annotated.png", desc: "With element labels" },
+          { cmd: "screenshot --annotate --fullpage --output /tmp/full.png", desc: "Full page annotated" },
+          { cmd: "snap", desc: "Auto-save to /tmp" },
+        ]
+      },
+      "snap": { desc: "Alias for screenshot (auto-saves to /tmp)", args: [], alias: "screenshot" },
     }
   },
   scroll: {
     desc: "Scrolling",
     commands: {
+      "scroll": { 
+        desc: "Scroll in direction", 
+        args: [], 
+        opts: { direction: "up|down|left|right", amount: "Scroll amount (1-10)" },
+        examples: [{ cmd: "scroll --direction down --amount 3", desc: "Scroll down" }]
+      },
       "scroll.top": { desc: "Scroll to top of page", args: [], opts: { selector: "Target specific container" } },
       "scroll.bottom": { desc: "Scroll to bottom of page", args: [], opts: { selector: "Target specific container" } },
-      "scroll.to": { desc: "Scroll element into view", args: [], opts: { ref: "Element ref from page.read" } },
+      "scroll.to": { 
+        desc: "Scroll element into view", 
+        args: [], 
+        opts: { ref: "Element ref" },
+        examples: [{ cmd: "scroll.to --ref e5", desc: "Scroll to element" }]
+      },
       "scroll.info": { desc: "Get scroll position info", args: [], opts: { selector: "Target specific container" } },
     }
   },
   page: {
     desc: "Page inspection",
     commands: {
-      "page.read": { desc: "Get accessibility tree", args: [], opts: { all: "Include all elements", ref: "Get specific element" } },
+      "page.read": { 
+        desc: "Get accessibility tree", 
+        args: [], 
+        opts: { all: "Include all elements", ref: "Get specific element" },
+        examples: [
+          { cmd: "page.read", desc: "Interactive elements only" },
+          { cmd: "page.read --all", desc: "All elements" },
+          { cmd: "read", desc: "Alias" },
+        ]
+      },
+      "read": { desc: "Alias for page.read", args: [], alias: "page.read" },
       "page.text": { desc: "Extract all text from page", args: [] },
       "page.state": { desc: "Get page state (modals, loading, etc.)", args: [] },
     }
@@ -45,10 +199,27 @@ const TOOLS = {
   wait: {
     desc: "Waiting",
     commands: {
-      "wait": { desc: "Wait N seconds", args: ["duration"] },
-      "wait.element": { desc: "Wait for element to appear", args: [], opts: { selector: "CSS selector", timeout: "Timeout in ms" } },
+      "wait": { 
+        desc: "Wait N seconds", 
+        args: ["duration"],
+        examples: [{ cmd: "wait 2", desc: "Wait 2 seconds" }]
+      },
+      "wait.element": { 
+        desc: "Wait for element to appear", 
+        args: ["selector"], 
+        opts: { timeout: "Timeout in ms" },
+        examples: [
+          { cmd: 'wait.element ".loading"', desc: "Wait for element" },
+          { cmd: 'wait.element "#result" --timeout 10000', desc: "With timeout" },
+        ]
+      },
       "wait.network": { desc: "Wait for network idle", args: [], opts: { timeout: "Timeout in ms" } },
-      "wait.url": { desc: "Wait for URL to match", args: [], opts: { pattern: "URL pattern to match", timeout: "Timeout in ms" } },
+      "wait.url": { 
+        desc: "Wait for URL to match", 
+        args: ["pattern"], 
+        opts: { timeout: "Timeout in ms" },
+        examples: [{ cmd: 'wait.url "/dashboard"', desc: "Wait for URL pattern" }]
+      },
       "wait.dom": { desc: "Wait for DOM to stabilize", args: [], opts: { stable: "Stability window in ms (default: 100)", timeout: "Max wait time in ms" } },
       "wait.load": { desc: "Wait for page to fully load", args: [], opts: { timeout: "Max wait time in ms (default: 30000)" } },
     }
@@ -56,51 +227,128 @@ const TOOLS = {
   input: {
     desc: "Input actions",
     commands: {
-      "click": { desc: "Click element or coordinates", args: [], opts: { ref: "Element ref", x: "X coordinate", y: "Y coordinate", button: "left|right|double|triple", selector: "CSS selector (js method)", method: "cdp|js (default: cdp)" } },
-      "type": { desc: "Type text", args: ["text"], opts: { selector: "CSS selector (required for js)", submit: "Press enter after", clear: "Clear first (js only)", method: "cdp|js (default: cdp)" } },
+      "click": { 
+        desc: "Click element or coordinates", 
+        args: ["ref"], 
+        opts: { 
+          ref: "Element ref", 
+          x: "X coordinate", 
+          y: "Y coordinate", 
+          button: "left|right|double|triple", 
+          selector: "CSS selector", 
+          index: "Which match (0-indexed) for selector",
+        },
+        examples: [
+          { cmd: "click e5", desc: "Click by ref" },
+          { cmd: 'click --selector ".btn"', desc: "Click by selector" },
+          { cmd: 'click --selector ".item" --index 2', desc: "Click 3rd match" },
+          { cmd: "click --x 100 --y 200", desc: "Click coordinates" },
+        ]
+      },
+      "type": { 
+        desc: "Type text", 
+        args: ["text"], 
+        opts: { 
+          into: "Target selector",
+          ref: "Element ref", 
+          submit: "Press enter after", 
+          clear: "Clear first", 
+          method: "cdp|js (default: cdp)" 
+        },
+        examples: [
+          { cmd: 'type "hello world"', desc: "Type at cursor" },
+          { cmd: 'type "user@example.com" --into "#email"', desc: "Type into element" },
+          { cmd: 'type "search query" --submit', desc: "Type and press Enter" },
+        ]
+      },
       "smart_type": { desc: "Type into specific element (js method)", args: [], opts: { selector: "CSS selector", text: "Text to type", clear: "Clear first (default: true)", submit: "Submit after" } },
-      "key": { desc: "Press key", args: ["key"], example: "Enter, Escape, cmd+a, ctrl+shift+p" },
+      "key": { 
+        desc: "Press key", 
+        args: ["key"], 
+        examples: [
+          { cmd: "key Enter", desc: "Press Enter" },
+          { cmd: "key Escape", desc: "Press Escape" },
+          { cmd: "key cmd+a", desc: "Select all (Mac)" },
+          { cmd: "key ctrl+shift+p", desc: "Key combo" },
+        ]
+      },
       "hover": { desc: "Hover over element", args: [], opts: { ref: "Element ref", x: "X coordinate", y: "Y coordinate" } },
       "drag": { desc: "Drag between points", args: [], opts: { from: "Start x,y", to: "End x,y" } },
-    }
-  },
-  nav: {
-    desc: "Navigation",
-    commands: {
-      "navigate": { desc: "Go to URL", args: ["url"] },
-      "screenshot": { desc: "Capture screenshot", args: [], opts: { output: "Save to file", selector: "Capture specific element" } },
     }
   },
   js: {
     desc: "JavaScript execution",
     commands: {
-      "js": { desc: "Execute JavaScript (use 'return' for values)", args: ["code"], opts: { file: "Run JS from file" } },
+      "js": { 
+        desc: "Execute JavaScript (use 'return' for values)", 
+        args: ["code"], 
+        opts: { file: "Run JS from file" },
+        examples: [
+          { cmd: 'js "return document.title"', desc: "Get title" },
+          { cmd: 'js "document.body.style.background = \'red\'"', desc: "Run code" },
+          { cmd: "js --file script.js", desc: "Run file" },
+        ]
+      },
     }
   },
   dev: {
     desc: "Dev tools",
     commands: {
-      "console": { desc: "Read console messages", args: [], opts: { clear: "Clear after reading", stream: "Continuous output", level: "Filter by level (log,warn,error)" } },
-      "network": { desc: "Read network requests", args: [], opts: { clear: "Clear after reading", stream: "Continuous output", filter: "Filter by URL pattern" } },
+      "console": { 
+        desc: "Read console messages", 
+        args: [], 
+        opts: { clear: "Clear after reading", stream: "Continuous output", level: "Filter by level (log,warn,error)", limit: "Max messages" },
+        examples: [
+          { cmd: "console", desc: "Get recent messages" },
+          { cmd: "console --level error", desc: "Only errors" },
+          { cmd: "console --stream", desc: "Stream live" },
+        ]
+      },
+      "network": { 
+        desc: "Read network requests", 
+        args: [], 
+        opts: { clear: "Clear after reading", stream: "Continuous output", filter: "Filter by URL pattern", limit: "Max requests" },
+        examples: [
+          { cmd: "network", desc: "Get recent requests" },
+          { cmd: "network --filter api", desc: "Filter by URL" },
+          { cmd: "network --stream", desc: "Stream live" },
+        ]
+      },
     }
   },
   health: {
     desc: "Health checks",
     commands: {
-      "health": { desc: "Wait for URL or element", args: [], opts: { url: "URL to check (expects 200)", selector: "CSS selector to wait for", expect: "Expected status code (default: 200)", timeout: "Timeout in ms (default: 30000)" } },
+      "health": { 
+        desc: "Wait for URL or element", 
+        args: [], 
+        opts: { url: "URL to check (expects 200)", selector: "CSS selector to wait for", expect: "Expected status code (default: 200)", timeout: "Timeout in ms" },
+        examples: [
+          { cmd: 'health --url "https://api.example.com"', desc: "Check URL" },
+          { cmd: 'health --selector ".loaded"', desc: "Wait for element" },
+        ]
+      },
     }
   },
   smoke: {
     desc: "Smoke testing",
     commands: {
-      "smoke": { desc: "Run smoke tests on URLs", args: [], opts: { urls: "URLs to test (space-separated)", routes: "Route group from config (future)", screenshot: "Directory to save screenshots", "fail-fast": "Stop on first error" } },
+      "smoke": { desc: "Run smoke tests on URLs", args: [], opts: { urls: "URLs to test (space-separated)", routes: "Route group from config", screenshot: "Directory to save screenshots", "fail-fast": "Stop on first error" } },
     }
   },
   dialog: {
     desc: "Browser dialog handling",
     commands: {
       "dialog.accept": { desc: "Accept current dialog", args: [], opts: { text: "Text for prompt input" } },
-      "dialog.dismiss": { desc: "Dismiss current dialog", args: [] },
+      "dialog.dismiss": { 
+        desc: "Dismiss current dialog", 
+        args: [], 
+        opts: { all: "Dismiss all dialogs repeatedly" },
+        examples: [
+          { cmd: "dialog.dismiss", desc: "Dismiss once" },
+          { cmd: "dialog.dismiss --all", desc: "Dismiss all" },
+        ]
+      },
       "dialog.info": { desc: "Get current dialog info", args: [] },
     }
   },
@@ -129,7 +377,12 @@ const TOOLS = {
   upload: {
     desc: "File upload",
     commands: {
-      "upload": { desc: "Upload file(s) to input", args: [], opts: { ref: "Element ref (e.g., e5)", files: "File path(s) comma-separated" } },
+      "upload": { 
+        desc: "Upload file(s) to input", 
+        args: [], 
+        opts: { ref: "Element ref", files: "File path(s) comma-separated" },
+        examples: [{ cmd: 'upload --ref e5 --files "/path/to/file.pdf"', desc: "Upload file" }]
+      },
     }
   },
   frame: {
@@ -139,62 +392,309 @@ const TOOLS = {
       "frame.js": { desc: "Execute JS in specific frame", args: [], opts: { id: "Frame ID from frame.list", code: "JavaScript code" } },
     }
   },
+  cookie: {
+    desc: "Cookie management",
+    commands: {
+      "cookie.list": { 
+        desc: "List all cookies for current tab's domain", 
+        args: [],
+        examples: [{ cmd: "cookie.list", desc: "Show all cookies" }]
+      },
+      "cookie.get": { desc: "Get specific cookie", args: [], opts: { name: "Cookie name" } },
+      "cookie.set": { 
+        desc: "Set a cookie", 
+        args: [], 
+        opts: { name: "Cookie name", value: "Cookie value", expires: "Expiry date (optional)" },
+        examples: [{ cmd: 'cookie.set --name "session" --value "abc123"', desc: "Set cookie" }]
+      },
+      "cookie.clear": { 
+        desc: "Clear cookies", 
+        args: [], 
+        opts: { name: "Specific cookie (optional)", all: "Clear all for domain" },
+        examples: [
+          { cmd: 'cookie.clear --name "session"', desc: "Clear one" },
+          { cmd: "cookie.clear --all", desc: "Clear all" },
+        ]
+      },
+    }
+  },
+  search: {
+    desc: "Text search",
+    commands: {
+      "search": { 
+        desc: "Search for text in page", 
+        args: ["term"], 
+        opts: { "case-sensitive": "Case-sensitive match", limit: "Max results" },
+        examples: [
+          { cmd: 'search "login"', desc: "Find text" },
+          { cmd: 'search "Error" --case-sensitive', desc: "Case sensitive" },
+          { cmd: 'find "button"', desc: "Using alias" },
+        ]
+      },
+      "find": { desc: "Alias for search", args: ["term"], alias: "search" },
+    }
+  },
+  batch: {
+    desc: "Batch execution",
+    commands: {
+      "batch": { 
+        desc: "Execute multiple actions", 
+        args: [], 
+        opts: { actions: "JSON array of actions", file: "Path to actions JSON file" },
+        examples: [
+          { cmd: 'batch --actions \'[{"type":"click","ref":"e1"},{"type":"wait","ms":500}]\'', desc: "Inline actions" },
+          { cmd: "batch --file workflow.json", desc: "From file" },
+        ]
+      },
+    }
+  },
+  zoom: {
+    desc: "Zoom control",
+    commands: {
+      "zoom": { 
+        desc: "Get or set zoom level", 
+        args: [], 
+        opts: { level: "Zoom level (e.g., 1.5 for 150%)", reset: "Reset to default zoom" },
+        examples: [
+          { cmd: "zoom", desc: "Get current zoom" },
+          { cmd: "zoom 1.5", desc: "Set to 150%" },
+          { cmd: "zoom --reset", desc: "Reset to 100%" },
+        ]
+      },
+    }
+  },
+  resize: {
+    desc: "Window management",
+    commands: {
+      "resize": { 
+        desc: "Resize browser window", 
+        args: [], 
+        opts: { width: "Window width", height: "Window height" },
+        examples: [{ cmd: "resize --width 1280 --height 720", desc: "Set size" }]
+      },
+    }
+  },
+  bookmark: {
+    desc: "Bookmark management",
+    commands: {
+      "bookmark.add": { desc: "Bookmark current page", args: [], opts: { folder: "Folder name" } },
+      "bookmark.remove": { desc: "Remove bookmark for current page", args: [] },
+      "bookmark.list": { desc: "List bookmarks", args: [], opts: { folder: "Folder name", limit: "Max results" } },
+    }
+  },
+  history: {
+    desc: "Browser history",
+    commands: {
+      "history.list": { 
+        desc: "Recent history", 
+        args: [], 
+        opts: { limit: "Max results" },
+        examples: [{ cmd: "history.list --limit 20", desc: "Last 20 items" }]
+      },
+      "history.search": { 
+        desc: "Search history", 
+        args: ["query"],
+        examples: [{ cmd: 'history.search "github"', desc: "Search history" }]
+      },
+    }
+  },
+};
+
+const HELP_TOPICS = {
+  refs: {
+    title: "Element References",
+    content: `Element refs (e1, e2, e3...) are stable identifiers from page.read.
+
+Usage:
+  1. Run page.read to get the accessibility tree
+  2. Find elements with refs like [e5] button "Submit"
+  3. Use the ref: click e5, scroll.to --ref e5, type "text" --ref e5
+
+Refs are more reliable than selectors for dynamic pages.`
+  },
+  selectors: {
+    title: "CSS Selectors",
+    content: `Use CSS selectors when you know the element's structure.
+
+Examples:
+  click --selector "#submit-btn"
+  click --selector ".btn-primary"
+  click --selector "[data-testid='login']"
+  click --selector "button:contains('Submit')"
+  wait.element ".loading-spinner"
+
+Use --index to select from multiple matches:
+  click --selector ".item" --index 2   # 3rd match (0-indexed)`
+  },
+  cookies: {
+    title: "Cookie Management",
+    content: `Cookies are scoped to the current tab's domain.
+
+Commands:
+  cookie.list           List all cookies
+  cookie.get --name X   Get specific cookie
+  cookie.set            Set a cookie
+  cookie.clear          Clear cookies
+
+Notes:
+  - HttpOnly cookies are accessible
+  - Use --expires with ISO date: "2025-12-31T00:00:00Z"`
+  },
+  batch: {
+    title: "Batch Execution",
+    content: `Run multiple actions in sequence.
+
+JSON format:
+  [
+    {"type": "click", "ref": "e1"},
+    {"type": "wait", "ms": 500},
+    {"type": "type", "text": "hello"},
+    {"type": "key", "key": "Enter"}
+  ]
+
+Supported types: click, type, key, wait, scroll, screenshot, navigate
+
+Options:
+  --actions '[...]'    Inline JSON
+  --file workflow.json Load from file`
+  },
+  screenshots: {
+    title: "Screenshots",
+    content: `Capture screenshots with various options.
+
+Commands:
+  screenshot --output file.png                          Basic screenshot
+  screenshot --annotate --output file.png               With element labels
+  screenshot --fullpage --output file.png               Full page capture
+  screenshot --annotate --fullpage --output file.png    Full page with labels
+  snap                                                  Auto-save to /tmp
+
+Options:
+  --output      Save path
+  --annotate    Draw element refs
+  --fullpage    Capture entire page
+  --max-height  Max height for fullpage (default: 4000)`
+  },
+  automation: {
+    title: "Automation Patterns",
+    content: `Common automation patterns:
+
+Wait for page load:
+  navigate "https://example.com"
+  wait.load
+
+Fill a form:
+  type "user@email.com" --into "#email"
+  type "password123" --into "#password"
+  click --selector "button[type=submit]"
+
+Wait for dynamic content:
+  click e5
+  wait.element ".results"
+  page.read
+
+Scroll and capture:
+  scroll.bottom
+  screenshot --fullpage --output full.png`
+  },
 };
 
 const ALL_SOCKET_TOOLS = [
-  "ai", "screenshot", "navigate", "read_page", "get_page_text", "form_input", "find_and_type",
-  "autocomplete", "set_value", "smart_type", "scroll_to_position", "get_scroll_info",
-  "close_dialogs", "page_state", "tabs_context", "javascript_tool", "wait_for_element",
-  "wait_for_url", "wait_for_network_idle", "read_console_messages", "read_network_requests",
-  "upload_image", "resize_window", "tabs_create", "tabs_register", "tabs_get_by_name", "health",
-  "tabs_list_named", "tabs_unregister", "list_tabs", "new_tab", "switch_tab", "close_tab",
-  "left_click", "right_click", "double_click", "triple_click", "type", "key", "type_submit",
-  "click_type", "click_type_submit", "scroll", "scroll_to", "hover", "left_click_drag",
-  "drag", "wait", "zoom", "computer", "smoke",
+  "ai", "screenshot", "navigate",
+  "form_input", "find_and_type", "autocomplete", "set_value", "smart_type",
+  "scroll_to_position", "get_scroll_info", "close_dialogs", "page_state",
+  "javascript_tool", "health", "smoke",
+  "click_type", "click_type_submit", "type", "key", "type_submit",
+  "scroll", "scroll_to", "hover", "left_click_drag", "drag", "wait",
+  "computer",
+  "page.read", "page.text", "page.state",
+  "tab.list", "tab.new", "tab.switch", "tab.close", "tab.name", "tab.unname", "tab.named",
+  "tab.group", "tab.ungroup", "tab.groups", "tab.reload",
+  "scroll.top", "scroll.bottom", "scroll.to", "scroll.info",
+  "wait.element", "wait.network", "wait.url", "wait.dom", "wait.load",
+  "click", "hover", "drag",
+  "js", "console", "network",
+  "dialog.accept", "dialog.dismiss", "dialog.info",
+  "emulate.network", "emulate.cpu", "emulate.geo",
+  "form.fill",
+  "perf.start", "perf.stop", "perf.metrics",
+  "upload",
+  "frame.list", "frame.js",
+  "cookie.list", "cookie.get", "cookie.set", "cookie.clear",
+  "search", "batch",
+  "zoom", "resize",
+  "back", "forward",
+  "bookmark.add", "bookmark.remove", "bookmark.list",
+  "history.list", "history.search",
 ];
 
-const showMainHelp = () => {
-  console.log(`
-  pi-chrome - Browser automation via Chrome extension
+const showBasicHelp = () => {
+  console.log(`pi-chrome v${VERSION} - Browser automation CLI
 
-Usage
-  pi-chrome <tool> [args] [options]
-  pi-chrome <group> --help            Show group commands
-  pi-chrome <tool> --help             Show tool options
-  pi-chrome --list                    List all socket tools
+Usage: pi-chrome <command> [args] [options]
 
-Groups`);
-  for (const [name, group] of Object.entries(TOOLS)) {
-    const cmds = Object.keys(group.commands).join(", ");
-    console.log(`  ${name.padEnd(10)} ${group.desc.padEnd(25)} ${cmds}`);
-  }
-  console.log(`
-Config
-  pi-chrome config              Show current config
-  pi-chrome config --init       Create starter pi-chrome.json in cwd
-  pi-chrome config --path       Show config file path
+Common Commands:
+  navigate <url>     Go to URL (alias: go)
+  click <ref>        Click element by ref or selector
+  type <text>        Type text at cursor or into element
+  screenshot         Capture screenshot (alias: snap)
+  page.read          Get page accessibility tree (alias: read)
+  search <term>      Search for text in page (alias: find)
+  wait <seconds>     Wait N seconds
 
-Script Mode
-  pi-chrome --script <file>                Run workflow from JSON file
-  pi-chrome --script <file> --dry-run      Show steps without executing
-  pi-chrome --script <file> --stop-on-error  Stop on first error (default: continue)
+Quick Examples:
+  pi-chrome go "https://example.com"
+  pi-chrome read
+  pi-chrome click e5
+  pi-chrome type "hello" --submit
+  pi-chrome snap
 
-Options
-  --tab-id <id>     Target specific tab
-  --json            Output raw JSON response
-  --auto-capture    On error: capture screenshot + console to /tmp
-  --list            List all 50+ socket tools
-  --help, -h        Show this help
-
-Examples
-  pi-chrome tab.list
-  pi-chrome tab.new "https://google.com"
-  pi-chrome screenshot --output /tmp/shot.png
-  pi-chrome smart_type --selector "#input" --text "hello" --submit
-  pi-chrome scroll.bottom
-  pi-chrome js "return document.title"
-  pi-chrome wait 2
+More Help:
+  pi-chrome --help-full           All commands
+  pi-chrome --help-topic <topic>  Topic guide (refs, selectors, cookies, batch, screenshots, automation)
+  pi-chrome <command> --help      Command details
+  pi-chrome --find <query>        Search for commands
+  pi-chrome --about <topic>       Learn about a topic
 `);
+};
+
+const showFullHelp = () => {
+  console.log(`pi-chrome v${VERSION} - Browser automation CLI
+
+Usage: pi-chrome <command> [args] [options]
+
+`);
+  for (const [groupName, group] of Object.entries(TOOLS)) {
+    console.log(`${groupName.toUpperCase()} - ${group.desc}`);
+    for (const [cmd, info] of Object.entries(group.commands)) {
+      if (info.alias) continue;
+      const argStr = info.args?.length ? `<${info.args.join("> <")}>` : "";
+      const line = `  ${cmd} ${argStr}`.padEnd(32);
+      console.log(`${line}${info.desc}`);
+    }
+    console.log();
+  }
+  console.log(`Aliases: snap -> screenshot, read -> page.read, find -> search, go -> navigate
+
+Options:
+  --tab-id <id>     Target specific tab
+  --json            Output raw JSON
+  --auto-capture    On error: capture screenshot + console to /tmp
+
+Script Mode:
+  pi-chrome --script <file>     Run workflow from JSON
+  pi-chrome --script <file> --dry-run
+`);
+};
+
+const showHelpTopic = (topic) => {
+  const t = HELP_TOPICS[topic];
+  if (!t) {
+    console.error(`Unknown topic: ${topic}`);
+    console.error(`Available topics: ${Object.keys(HELP_TOPICS).join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`\n${t.title}\n${"=".repeat(t.title.length)}\n\n${t.content}\n`);
 };
 
 const showGroupHelp = (groupName) => {
@@ -204,46 +704,62 @@ const showGroupHelp = (groupName) => {
     console.error(`Available groups: ${Object.keys(TOOLS).join(", ")}`);
     process.exit(1);
   }
-  console.log(`\n  ${groupName} - ${group.desc}\n`);
+  console.log(`\n${groupName} - ${group.desc}\n`);
   for (const [cmd, info] of Object.entries(group.commands)) {
+    if (info.alias) {
+      console.log(`  ${cmd} -> ${info.alias}\n`);
+      continue;
+    }
     const argStr = info.args?.length ? `<${info.args.join("> <")}>` : "";
     console.log(`  ${cmd} ${argStr}`);
     console.log(`      ${info.desc}`);
     if (info.opts) {
       for (const [opt, desc] of Object.entries(info.opts)) {
-        console.log(`      --${opt.padEnd(12)} ${desc}`);
+        console.log(`      --${opt.padEnd(14)} ${desc}`);
       }
     }
-    if (info.example) {
-      console.log(`      Example: ${info.example}`);
+    if (info.examples?.length) {
+      console.log("      Examples:");
+      for (const ex of info.examples) {
+        console.log(`        pi-chrome ${ex.cmd}`);
+      }
     }
     console.log();
   }
 };
 
 const showToolHelp = (toolName) => {
-  for (const group of Object.values(TOOLS)) {
+  for (const [groupName, group] of Object.entries(TOOLS)) {
     const info = group.commands[toolName];
     if (info) {
+      if (info.alias) {
+        console.log(`\n  ${toolName} -> ${info.alias}\n`);
+        showToolHelp(info.alias);
+        return;
+      }
       const argStr = info.args?.length ? `<${info.args.join("> <")}>` : "";
-      console.log(`\n  ${toolName} ${argStr}\n`);
-      console.log(`  ${info.desc}\n`);
+      console.log(`\n${toolName} - ${info.desc}\n`);
+      console.log(`Usage: pi-chrome ${toolName} ${argStr}\n`);
       if (info.args?.length) {
-        console.log("  Arguments:");
+        console.log("Arguments:");
         for (const arg of info.args) {
-          console.log(`    <${arg}>`);
+          console.log(`  <${arg}>`);
         }
         console.log();
       }
       if (info.opts) {
-        console.log("  Options:");
+        console.log("Options:");
         for (const [opt, desc] of Object.entries(info.opts)) {
-          console.log(`    --${opt.padEnd(14)} ${desc}`);
+          console.log(`  --${opt.padEnd(18)} ${desc}`);
         }
         console.log();
       }
-      if (info.example) {
-        console.log(`  Example values: ${info.example}\n`);
+      if (info.examples?.length) {
+        console.log("Examples:");
+        for (const ex of info.examples) {
+          console.log(`  pi-chrome ${ex.cmd.padEnd(40)} ${ex.desc}`);
+        }
+        console.log();
       }
       return;
     }
@@ -251,15 +767,64 @@ const showToolHelp = (toolName) => {
   if (ALL_SOCKET_TOOLS.includes(toolName)) {
     console.log(`\n  ${toolName}\n`);
     console.log("  Socket API tool. Use --json to see response format.\n");
-    console.log(`  Example: pi-chrome ${toolName} --json\n`);
     return;
   }
-  console.error(`Unknown tool: ${toolName}`);
+  console.error(`Unknown command: ${toolName}`);
+  process.exit(1);
+};
+
+const fuzzyFind = (query) => {
+  const terms = query.toLowerCase().split(/\s+/);
+  const results = [];
+  
+  for (const [groupName, group] of Object.entries(TOOLS)) {
+    for (const [cmd, info] of Object.entries(group.commands)) {
+      if (info.alias) continue;
+      const searchText = `${cmd} ${info.desc} ${groupName}`.toLowerCase();
+      const score = terms.filter(t => searchText.includes(t)).length;
+      if (score > 0) {
+        results.push({ cmd, desc: info.desc, group: groupName, score });
+      }
+    }
+  }
+  
+  return results.sort((a, b) => b.score - a.score);
+};
+
+const showFindResults = (query) => {
+  const results = fuzzyFind(query);
+  if (results.length === 0) {
+    console.log(`No commands found for: "${query}"`);
+    return;
+  }
+  console.log(`\nSearch results for "${query}":\n`);
+  for (const r of results.slice(0, 10)) {
+    console.log(`  ${r.cmd.padEnd(24)} ${r.desc}`);
+  }
+  console.log();
+};
+
+const showAbout = (topic) => {
+  const t = HELP_TOPICS[topic];
+  if (t) {
+    showHelpTopic(topic);
+    return;
+  }
+  const topicLower = topic.toLowerCase();
+  for (const [groupName, group] of Object.entries(TOOLS)) {
+    if (groupName === topicLower || group.desc.toLowerCase().includes(topicLower)) {
+      showGroupHelp(groupName);
+      return;
+    }
+  }
+  console.error(`Unknown topic: ${topic}`);
+  console.error(`Available topics: ${Object.keys(HELP_TOPICS).join(", ")}`);
+  console.error(`Or use a group name: ${Object.keys(TOOLS).join(", ")}`);
   process.exit(1);
 };
 
 const showAllTools = () => {
-  console.log("\n  All available socket tools:\n");
+  console.log("\n  All available commands:\n");
   const sorted = [...ALL_SOCKET_TOOLS].sort();
   const cols = 4;
   const width = 22;
@@ -267,17 +832,41 @@ const showAllTools = () => {
     const row = sorted.slice(i, i + cols).map(t => t.padEnd(width)).join("");
     console.log("  " + row);
   }
-  console.log(`\n  Total: ${ALL_SOCKET_TOOLS.length} tools\n`);
-  console.log("  Plus dot-notation aliases: tab.*, scroll.*, page.*, wait.*\n");
+  console.log(`\n  Total: ${ALL_SOCKET_TOOLS.length} commands\n`);
 };
 
 if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-  showMainHelp();
+  showBasicHelp();
+  process.exit(0);
+}
+
+if (args[0] === "--help-full") {
+  showFullHelp();
+  process.exit(0);
+}
+
+if (args[0] === "--help-topic" && args[1]) {
+  showHelpTopic(args[1]);
+  process.exit(0);
+}
+
+if (args[0] === "--version" || args[0] === "-v") {
+  console.log(`pi-chrome version ${VERSION}`);
   process.exit(0);
 }
 
 if (args[0] === "--list") {
   showAllTools();
+  process.exit(0);
+}
+
+if (args[0] === "--find" && args[1]) {
+  showFindResults(args.slice(1).join(" "));
+  process.exit(0);
+}
+
+if (args[0] === "--about" && args[1]) {
+  showAbout(args[1]);
   process.exit(0);
 }
 
@@ -309,8 +898,15 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 
 if (TOOLS[args[0]] && args.length === 1) {
-  showGroupHelp(args[0]);
-  process.exit(0);
+  const group = TOOLS[args[0]];
+  const sameNameCmd = group.commands[args[0]];
+  const executableAlone = ["zoom"];
+  if (sameNameCmd && executableAlone.includes(args[0])) {
+    // Command that works without args - execute it
+  } else {
+    showGroupHelp(args[0]);
+    process.exit(0);
+  }
 }
 
 if (args[0] === "config") {
@@ -487,7 +1083,7 @@ if (args.includes("--script")) {
   return;
 }
 
-const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all"];
+const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset"];
 
 const parseArgs = (rawArgs) => {
   const result = { positional: [], options: {} };
@@ -523,8 +1119,21 @@ let tool = positional[0];
 let firstArg = positional[1];
 
 if (!tool) {
-  console.error("Error: No tool specified");
+  console.error("Error: No command specified");
   process.exit(1);
+}
+
+if (REMOVED_COMMANDS[tool]) {
+  console.error(`Error: Unknown command: ${tool}`);
+  console.error(`This command was renamed. Use: ${REMOVED_COMMANDS[tool]}`);
+  process.exit(1);
+}
+
+const wasSnap = tool === "snap";
+tool = ALIASES[tool] || tool;
+
+if (wasSnap && !options.output && !options.savePath) {
+  options.savePath = `/tmp/pi-chrome-snap-${Date.now()}.png`;
 }
 
 if (tool === "smoke") {
@@ -557,6 +1166,7 @@ if (tool === "smoke") {
 const PRIMARY_ARG_MAP = {
   ai: "query",
   navigate: "url",
+  go: "url",
   js: "code",
   javascript_tool: "code",
   key: "key",
@@ -575,9 +1185,26 @@ const PRIMARY_ARG_MAP = {
   smart_type: "text",
   "emulate.network": "preset",
   "emulate.cpu": "rate",
+  search: "term",
+  find: "term",
+  "wait.element": "selector",
+  "wait.url": "pattern",
+  zoom: "level",
+  "history.search": "query",
 };
 
 const toolArgs = { ...options };
+
+if (tool === "click" && firstArg) {
+  if (/^e\d+$/.test(firstArg)) {
+    toolArgs.ref = firstArg;
+    firstArg = undefined;
+  } else if (/^\d+$/.test(firstArg) && positional[2] && /^\d+$/.test(positional[2])) {
+    toolArgs.x = parseInt(firstArg, 10);
+    toolArgs.y = parseInt(positional[2], 10);
+    firstArg = undefined;
+  }
+}
 
 if (firstArg !== undefined) {
   const primaryKey = PRIMARY_ARG_MAP[tool];
@@ -588,6 +1215,11 @@ if (firstArg !== undefined) {
     else if (/^-?\d+$/.test(val)) val = parseInt(val, 10);
     toolArgs[primaryKey] = val;
   }
+}
+
+if (toolArgs.into && !toolArgs.selector) {
+  toolArgs.selector = toolArgs.into;
+  delete toolArgs.into;
 }
 
 const globalOpts = {};
@@ -604,7 +1236,7 @@ delete toolArgs["auto-capture"];
 const outputPath = toolArgs.output;
 delete toolArgs.output;
 
-if (tool === "screenshot" && outputPath) {
+if ((tool === "screenshot" || tool === "snap") && outputPath) {
   if (typeof outputPath !== "string") {
     console.error("Error: --output requires a file path");
     process.exit(1);
@@ -628,7 +1260,7 @@ let finalTool = tool;
 if (methodFlag === "js") {
   if (tool === "type") {
     if (!toolArgs.selector) {
-      console.error("Error: --selector required for type with --method js");
+      console.error("Error: --selector or --into required for type with --method js");
       process.exit(1);
     }
     finalTool = "smart_type";
@@ -637,7 +1269,6 @@ if (methodFlag === "js") {
       console.error("Error: --selector required for click with --method js");
       process.exit(1);
     }
-    finalTool = "js_click";
     toolArgs.code = `document.querySelector(${JSON.stringify(toolArgs.selector)})?.click()`;
     delete toolArgs.selector;
     finalTool = "js";
@@ -789,7 +1420,7 @@ const performAutoCapture = async () => {
   try {
     const [screenshotResp, consoleResp] = await Promise.all([
       sendRequest("screenshot", { savePath: screenshotPath }),
-      sendRequest("read_console_messages", {}),
+      sendRequest("console", {}),
     ]);
 
     if (screenshotResp.result) {
@@ -895,12 +1526,13 @@ async function handleResponse(response) {
     process.exit(0);
   }
 
-  if (tool === "screenshot" && data?.base64 && outputPath) {
-    fs.writeFileSync(outputPath, Buffer.from(data.base64, "base64"));
-    console.log(`Saved: ${outputPath}`);
-  } else if (tool === "screenshot" && data?.message) {
+  if ((tool === "screenshot" || tool === "snap") && data?.base64 && (outputPath || toolArgs.savePath)) {
+    const saveTo = outputPath || toolArgs.savePath;
+    fs.writeFileSync(saveTo, Buffer.from(data.base64, "base64"));
+    console.log(`Screenshot saved: ${saveTo}`);
+  } else if ((tool === "screenshot" || tool === "snap") && data?.message) {
     console.log(data.message);
-  } else if (tool === "list_tabs" || tool === "tab.list") {
+  } else if (tool === "tab.list") {
     const tabs = data?.tabs || data || [];
     if (Array.isArray(tabs)) {
       for (const t of tabs) {
@@ -909,7 +1541,7 @@ async function handleResponse(response) {
     } else {
       console.log(JSON.stringify(data, null, 2));
     }
-  } else if (tool === "tab.named" || tool === "tabs_list_named") {
+  } else if (tool === "tab.named") {
     const named = data?.tabs || data?.namedTabs || data || [];
     if (Array.isArray(named)) {
       if (named.length === 0) {
@@ -928,11 +1560,11 @@ async function handleResponse(response) {
     } else {
       console.log(data.content);
     }
-  } else if (tool === "read_page" && data?.pageContent) {
+  } else if (tool === "page.read" && data?.pageContent) {
     console.log(data.pageContent);
-  } else if (tool === "get_page_text" && data?.text) {
+  } else if (tool === "page.text" && data?.text) {
     console.log(data.text);
-  } else if (tool === "js" || tool === "javascript_tool") {
+  } else if (tool === "js") {
     if (data?.result !== undefined) {
       const val = data.result.value ?? data.result;
       console.log(typeof val === "string" ? val : JSON.stringify(val, null, 2));
@@ -975,6 +1607,10 @@ async function handleResponse(response) {
       socket.end();
       process.exit(1);
     }
+  } else if (tool === "zoom" && data?.zoom !== undefined) {
+    console.log(`Zoom: ${Math.round(data.zoom * 100)}%`);
+  } else if (tool === "back" || tool === "forward") {
+    console.log("OK");
   } else if (typeof data === "string") {
     console.log(data);
   } else if (data?.success === true) {
