@@ -1,5 +1,3 @@
-import "@mariozechner/pi-web-ui/app.css";
-
 const app = document.getElementById("app")!;
 
 app.innerHTML = `

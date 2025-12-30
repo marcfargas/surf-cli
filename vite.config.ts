@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
-import { cpSync, mkdirSync, existsSync, renameSync, rmSync } from "fs";
+import { cpSync, mkdirSync, existsSync, rmSync } from "fs";
 import { fileURLToPath } from "url";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 
@@ -21,7 +21,6 @@ export default defineConfig({
     },
     rollupOptions: {
       input: {
-        "sidepanel/index": resolve(__dirname, "src/sidepanel/index.html"),
         "service-worker/index": resolve(__dirname, "src/service-worker/index.ts"),
         "content/accessibility-tree": resolve(__dirname, "src/content/accessibility-tree.ts"),
         "content/visual-indicator": resolve(__dirname, "src/content/visual-indicator.ts"),
@@ -66,12 +65,6 @@ export default defineConfig({
           if (existsSync(src)) {
             cpSync(src, resolve(iconsDir, `icon-${size}.png`));
           }
-        }
-
-        const srcSidepanel = resolve(__dirname, "dist/src/sidepanel/index.html");
-        const destSidepanel = resolve(__dirname, "dist/sidepanel/index.html");
-        if (existsSync(srcSidepanel)) {
-          cpSync(srcSidepanel, destSidepanel);
         }
 
         const srcOptions = resolve(__dirname, "dist/src/options/options.html");

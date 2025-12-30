@@ -200,16 +200,7 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
   }
 });
 
-async function openSidePanel(tabId: number): Promise<void> {
-  chrome.sidePanel.setOptions({
-    tabId,
-    path: `sidepanel/index.html?tabId=${encodeURIComponent(tabId)}`,
-    enabled: true,
-  });
-  chrome.sidePanel.open({ tabId });
-  
-  await ensureTabGroup(tabId);
-}
+
 
 async function ensureTabGroup(tabId: number): Promise<void> {
   try {
@@ -232,20 +223,7 @@ async function ensureTabGroup(tabId: number): Promise<void> {
   }
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
-  if (tab.id) {
-    await openSidePanel(tab.id);
-  }
-});
 
-chrome.commands.onCommand.addListener(async (command) => {
-  if (command === "toggle-side-panel") {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      await openSidePanel(tab.id);
-    }
-  }
-});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   cdp.detach(tabId);
@@ -965,14 +943,6 @@ async function handleMessage(
       
       if (targetTabId) {
         chrome.runtime.sendMessage({ type: "STOP_AGENT", targetTabId });
-      }
-      return { success: true };
-    }
-
-    case "OPEN_SIDEPANEL": {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) {
-        await openSidePanel(tab.id);
       }
       return { success: true };
     }
