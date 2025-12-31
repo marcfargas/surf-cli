@@ -58,6 +58,14 @@ node native/host.cjs
 
 The host creates a socket at `/tmp/surf.sock`.
 
+### macOS: Grant Full Disk Access
+
+On macOS, Chrome needs Full Disk Access to run native messaging hosts:
+
+1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
+2. Add **Google Chrome** (or enable it if already listed)
+3. Restart Chrome
+
 ## Usage
 
 ```bash
