@@ -925,6 +925,77 @@ if (args[0] === "server") {
   return;
 }
 
+if (args[0] === "extension-path" || args[0] === "path") {
+  const path = require("path");
+  const distPath = path.resolve(__dirname, "../dist");
+  console.log(distPath);
+  process.exit(0);
+}
+
+if (args[0] === "install") {
+  const { spawnSync } = require("child_process");
+  const scriptPath = require("path").resolve(__dirname, "../scripts/install-native-host.cjs");
+  const installArgs = args.slice(1);
+  
+  if (installArgs.length === 0 || installArgs[0] === "--help" || installArgs[0] === "-h") {
+    console.log(`
+Usage: surf install <extension-id> [options]
+
+Install native messaging host for browser communication.
+
+Arguments:
+  extension-id    Chrome extension ID (32 lowercase letters a-p)
+                  Find at chrome://extensions with Developer Mode enabled
+
+Options:
+  -b, --browser   Browser(s) to install for (default: chrome)
+                  Values: chrome, chromium, brave, edge, arc, all
+                  Multiple: --browser chrome,brave
+
+Examples:
+  surf install hnfbepgmaoklhekckbpjnleifhahkcpl
+  surf install hnfbepgmaoklhekckbpjnleifhahkcpl --browser brave
+  surf install hnfbepgmaoklhekckbpjnleifhahkcpl --browser all
+`);
+    process.exit(0);
+  }
+
+  const result = spawnSync(process.execPath, [scriptPath, ...installArgs], {
+    stdio: "inherit",
+  });
+  process.exit(result.status || 0);
+}
+
+if (args[0] === "uninstall") {
+  const { spawnSync } = require("child_process");
+  const scriptPath = require("path").resolve(__dirname, "../scripts/uninstall-native-host.cjs");
+  const uninstallArgs = args.slice(1);
+  
+  if (uninstallArgs.includes("--help") || uninstallArgs.includes("-h")) {
+    console.log(`
+Usage: surf uninstall [options]
+
+Remove native messaging host configuration.
+
+Options:
+  -b, --browser   Browser(s) to uninstall from (default: chrome)
+                  Values: chrome, chromium, brave, edge, arc, all
+  -a, --all       Uninstall from all browsers and remove wrapper
+
+Examples:
+  surf uninstall
+  surf uninstall --browser brave
+  surf uninstall --all
+`);
+    process.exit(0);
+  }
+
+  const result = spawnSync(process.execPath, [scriptPath, ...uninstallArgs], {
+    stdio: "inherit",
+  });
+  process.exit(result.status || 0);
+}
+
 if (args.includes("--help") || args.includes("-h")) {
   const tool = args[0];
   if (TOOLS[tool]) {

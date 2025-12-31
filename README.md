@@ -38,33 +38,51 @@ Surf takes a different approach:
 
 ## Installation
 
+### Quick Start
+
 ```bash
+# 1. Install globally
+npm install -g surf-cli
+
+# 2. Load extension in Chrome
+#    - Open chrome://extensions
+#    - Enable "Developer mode"
+#    - Click "Load unpacked"
+#    - Paste the path from: surf extension-path
+
+# 3. Install native host (copy extension ID from chrome://extensions)
+surf install <extension-id>
+
+# 4. Restart Chrome and test
+surf tab.list
+```
+
+### Multi-Browser Support
+
+```bash
+surf install <extension-id>                    # Chrome (default)
+surf install <extension-id> --browser brave    # Brave
+surf install <extension-id> --browser all      # All supported browsers
+```
+
+Supported: `chrome`, `chromium`, `brave`, `edge`, `arc`
+
+### Uninstall
+
+```bash
+surf uninstall                  # Chrome only
+surf uninstall --all            # All browsers + wrapper files
+```
+
+### Development Setup
+
+```bash
+git clone https://github.com/nicobailon/surf-cli.git
+cd surf-cli
 npm install
 npm run build
+# Then load dist/ as unpacked extension
 ```
-
-### Load Extension
-
-1. Open `chrome://extensions`
-2. Enable "Developer mode"
-3. Click "Load unpacked" and select the `dist/` folder
-
-### Setup Native Host
-
-```bash
-npm run install:native <extension-id>
-node native/host.cjs
-```
-
-The host creates a socket at `/tmp/surf.sock`.
-
-### macOS: Grant Full Disk Access
-
-On macOS, Chrome needs Full Disk Access to run native messaging hosts:
-
-1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
-2. Add **Google Chrome** (or enable it if already listed)
-3. Restart Chrome
 
 ## Usage
 
