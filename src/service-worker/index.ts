@@ -2055,16 +2055,26 @@ chrome.runtime.onInstalled.addListener((details) => {
   debugLog("Extension installed/updated:", details.reason);
 });
 
+const COMMANDS_WITHOUT_TAB = new Set([
+  "LIST_TABS", "NEW_TAB", "TABS_NEW", "CLOSE_TABS", "SWITCH_TAB", "TABS_SWITCH",
+  "TABS_REGISTER", "TABS_UNREGISTER", "TABS_LIST_NAMED", "TABS_GET_BY_NAME",
+  "CREATE_TAB_GROUP", "UNGROUP_TABS", "LIST_TAB_GROUPS", "GET_HISTORY", "SEARCH_HISTORY",
+  "GET_COOKIES", "SET_COOKIE", "DELETE_COOKIES", "GET_BOOKMARKS", "ADD_BOOKMARK", 
+  "DELETE_BOOKMARK", "DIALOG_DISMISS", "DIALOG_ACCEPT", "DIALOG_INFO"
+]);
+
 initNativeMessaging(async (msg) => {
   let tabId = msg.tabId;
   const isDialogCommand = msg.type?.startsWith("DIALOG_");
+  const needsTab = !COMMANDS_WITHOUT_TAB.has(msg.type);
+  
   if (tabId && !isDialogCommand) {
     try {
       await chrome.tabs.get(tabId);
     } catch {
-      throw new Error(`Invalid tab ID: ${tabId}`);
+      throw new Error(`Invalid tab ID: ${tabId}. Use 'surf tab.list' to see available tabs.`);
     }
-  } else if (!tabId) {
+  } else if (!tabId && needsTab) {
     let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     let tab: chrome.tabs.Tab | undefined = tabs[0];
     if (!tab || tab.url?.startsWith('chrome-extension://')) {
@@ -2075,7 +2085,10 @@ initNativeMessaging(async (msg) => {
       tabs = await chrome.tabs.query({ active: true });
       tab = tabs.find(t => !t.url?.startsWith('chrome-extension://') && !t.url?.startsWith('chrome://'));
     }
-    tabId = tab?.id;
+    if (!tab?.id) {
+      throw new Error("No active tab found. Use 'surf tab.new <url>' to create one, or 'surf tab.list' to see available tabs.");
+    }
+    tabId = tab.id;
   }
   const result = await handleMessage({ ...msg, tabId }, {} as chrome.runtime.MessageSender);
   return { ...result, _resolvedTabId: tabId };
