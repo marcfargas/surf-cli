@@ -2,6 +2,8 @@
 const net = require("net");
 const fs = require("fs");
 const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
+const networkFormatters = require("./formatters/network.cjs");
+const networkStore = require("./network-store.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
 const args = process.argv.slice(2);
@@ -12,6 +14,8 @@ const ALIASES = {
   read: "page.read",
   find: "search",
   go: "navigate",
+  net: "network",
+  "network.dump": "network.get",
 };
 
 const REMOVED_COMMANDS = {
@@ -342,13 +346,97 @@ const TOOLS = {
         ]
       },
       "network": { 
-        desc: "Read network requests", 
+        desc: "List captured network requests", 
         args: [], 
-        opts: { clear: "Clear after reading", stream: "Continuous output", filter: "Filter by URL pattern", limit: "Max requests" },
+        opts: { 
+          origin: "Filter by origin (domain)",
+          method: "Filter by method (GET,POST,...)",
+          status: "Filter by status (200, 4xx, 5xx)",
+          type: "Filter by content type (json, html, proto)",
+          since: "Show requests since (5m, 1h, timestamp)",
+          last: "Show last N requests",
+          "has-body": "Only requests with body",
+          "exclude-static": "Exclude images/fonts/css/js",
+          filter: "URL pattern filter",
+          format: "Output format: compact, urls, curl, raw",
+          all: "Show all (no limit)",
+          v: "Verbose output",
+          vv: "Very verbose output",
+          clear: "Clear after reading",
+          stream: "Continuous output"
+        },
         examples: [
-          { cmd: "network", desc: "Get recent requests" },
-          { cmd: "network --filter api", desc: "Filter by URL" },
-          { cmd: "network --stream", desc: "Stream live" },
+          { cmd: "network", desc: "Show recent requests" },
+          { cmd: "network --origin api.github.com", desc: "Filter by origin" },
+          { cmd: "network --method POST --type json", desc: "POST JSON requests" },
+          { cmd: "network --format curl", desc: "Output as curl commands" },
+          { cmd: "network -v", desc: "Verbose with headers" },
+        ]
+      },
+      "network.get": { 
+        desc: "Get full details for a request", 
+        args: ["id"],
+        opts: {},
+        examples: [
+          { cmd: "network.get r_001", desc: "Get request details" }
+        ]
+      },
+      "network.body": { 
+        desc: "Get response body (for piping)", 
+        args: ["id"],
+        opts: { request: "Get request body instead" },
+        examples: [
+          { cmd: "network.body r_001", desc: "Get response body" },
+          { cmd: "network.body r_001 | jq .", desc: "Pipe JSON to jq" }
+        ]
+      },
+      "network.curl": { 
+        desc: "Generate curl command for request", 
+        args: ["id"],
+        opts: {},
+        examples: [
+          { cmd: "network.curl r_001", desc: "Generate curl" }
+        ]
+      },
+      "network.origins": { 
+        desc: "List captured origins with stats", 
+        args: [],
+        opts: { "by-tab": "Group by tab" },
+        examples: [
+          { cmd: "network.origins", desc: "List origins" }
+        ]
+      },
+      "network.clear": { 
+        desc: "Clear captured requests", 
+        args: [],
+        opts: { before: "Clear before timestamp/duration", origin: "Clear specific origin" },
+        examples: [
+          { cmd: "network.clear", desc: "Clear all" },
+          { cmd: "network.clear --before 1h", desc: "Clear older than 1 hour" }
+        ]
+      },
+      "network.stats": { 
+        desc: "Show capture statistics", 
+        args: [],
+        opts: {},
+        examples: [
+          { cmd: "network.stats", desc: "Show stats" }
+        ]
+      },
+      "network.export": { 
+        desc: "Export captured requests", 
+        args: [],
+        opts: { har: "Export as HAR", jsonl: "Export as JSONL", output: "Output file path" },
+        examples: [
+          { cmd: "network.export --har", desc: "Export as HAR" }
+        ]
+      },
+      "network.path": { 
+        desc: "Get file paths for request data", 
+        args: ["id"],
+        opts: {},
+        examples: [
+          { cmd: "network.path r_001", desc: "Get file paths" }
         ]
       },
     }
@@ -650,7 +738,9 @@ const ALL_SOCKET_TOOLS = [
   "scroll.top", "scroll.bottom", "scroll.to", "scroll.info",
   "wait.element", "wait.network", "wait.url", "wait.dom", "wait.load",
   "click", "hover", "drag",
-  "js", "console", "network",
+  "js", "console", "network", 
+  "network.get", "network.body", "network.curl", "network.origins", 
+  "network.clear", "network.stats", "network.export", "network.path",
   "dialog.accept", "dialog.dismiss", "dialog.info",
   "emulate.network", "emulate.cpu", "emulate.geo",
   "form.fill",
@@ -1192,7 +1282,7 @@ if (args.includes("--script")) {
   return;
 }
 
-const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full", "soft-fail"];
+const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full", "soft-fail", "has-body", "exclude-static", "v", "vv", "request", "by-tab", "har", "jsonl"];
 
 const AUTO_SCREENSHOT_TOOLS = ["click", "type", "key", "smart_type", "form.fill", "form_input", "drag", "hover", "scroll", "scroll.top", "scroll.bottom", "scroll.to", "dialog.accept", "dialog.dismiss", "js", "eval"];
 
@@ -1302,6 +1392,10 @@ const PRIMARY_ARG_MAP = {
   "wait.url": "pattern",
   zoom: "level",
   "history.search": "query",
+  "network.get": "id",
+  "network.body": "id",
+  "network.curl": "id",
+  "network.path": "id",
 };
 
 const toolArgs = { ...options };
@@ -1347,6 +1441,10 @@ const globalOpts = {};
 if (toolArgs["tab-id"] !== undefined) {
   globalOpts.tabId = toolArgs["tab-id"];
   delete toolArgs["tab-id"];
+}
+if (toolArgs["network-path"] !== undefined) {
+  networkStore.setBasePath(toolArgs["network-path"]);
+  delete toolArgs["network-path"];
 }
 const wantJson = toolArgs.json === true;
 delete toolArgs.json;
@@ -1768,6 +1866,43 @@ async function handleResponse(response) {
     console.log(`Zoom: ${Math.round(data.zoom * 100)}%`);
   } else if (tool === "back" || tool === "forward") {
     console.log("OK");
+  } else if (tool === "network" && data?.entries) {
+    // Network list with formatting
+    const format = toolArgs.format || 'compact';
+    const verboseLevel = toolArgs.v ? 1 : (toolArgs.vv ? 2 : 0);
+    
+    if (format === 'urls') {
+      console.log(networkFormatters.formatUrls(data.entries));
+    } else if (format === 'curl') {
+      console.log(networkFormatters.formatCurlBatch(data.entries));
+    } else if (format === 'raw') {
+      console.log(networkFormatters.formatRaw(data.entries));
+    } else if (verboseLevel > 0) {
+      console.log(networkFormatters.formatVerbose(data.entries, verboseLevel));
+    } else {
+      console.log(networkFormatters.formatCompact(data.entries, { verbose: verboseLevel }));
+    }
+  } else if (tool === "network.get" && data?.entry) {
+    console.log(networkFormatters.formatEntry(data.entry));
+  } else if (tool === "network.body" && data?.body !== undefined) {
+    // Raw body for piping
+    process.stdout.write(data.body);
+  } else if (tool === "network.curl" && data?.curl) {
+    console.log(data.curl);
+  } else if (tool === "network.curl" && data?.entry) {
+    console.log(networkFormatters.formatCurl(data.entry));
+  } else if (tool === "network.origins" && data?.origins) {
+    console.log(networkFormatters.formatOrigins(data.origins));
+  } else if (tool === "network.stats" && data?.stats) {
+    console.log(networkFormatters.formatStats(data.stats));
+  } else if (tool === "network.clear" && data?.cleared !== undefined) {
+    console.log(`Cleared ${data.cleared} requests`);
+  } else if (tool === "network.export" && data?.path) {
+    console.log(`Exported to: ${data.path}`);
+  } else if (tool === "network.path" && data?.paths) {
+    for (const [key, val] of Object.entries(data.paths)) {
+      console.log(`${key}: ${val}`);
+    }
   } else if (typeof data === "string") {
     console.log(data);
   } else if (data?.success === true) {

@@ -18,6 +18,42 @@ interface NetworkRequest {
   timestamp: number;
 }
 
+export interface NetworkEntry {
+  id: string;                    // "r_<timestamp>_<seq>"
+  ts: number;                    // Request start timestamp (ms)
+  duration?: number;             // Total time (ms)
+  ttfb?: number;                 // Time to first byte (ms)
+  
+  // Request
+  method: string;
+  url: string;
+  origin: string;                // Extracted from URL
+  requestHeaders: Record<string, string>;
+  requestBody?: string;          // POST/PUT body
+  requestBodySize?: number;
+  
+  // Response  
+  status?: number;
+  statusText?: string;
+  mimeType?: string;
+  responseHeaders?: Record<string, string>;
+  responseBody?: string;         // Will be fetched via getResponseBody
+  responseBodySize?: number;
+  
+  // Metadata
+  tabId: number;
+  tabUrl?: string;               // Page URL that initiated request
+  type?: string;                 // "xhr", "fetch", "document", etc.
+  
+  // Flags
+  flags: string[];               // ["binary", "truncated", "protobuf", "failed"]
+  
+  // Internal tracking
+  _requestId: string;            // CDP requestId for lazy loading
+  _responseReceived: boolean;    // Whether response was received
+  _loadingFinished: boolean;     // Whether loading finished
+}
+
 interface PendingDialog {
   type: "alert" | "confirm" | "prompt" | "beforeunload";
   message: string;
@@ -87,11 +123,28 @@ export class CDPController {
   private targets = new Map<number, Debuggee>();
   private consoleMessages: Map<number, ConsoleMessage[]> = new Map();
   private networkRequests: Map<number, NetworkRequest[]> = new Map();
+  private networkEntries: Map<number, Map<string, NetworkEntry>> = new Map(); // tabId -> requestId -> entry
   private consoleCallbacks: Map<number, Map<number, ConsoleEventCallback>> = new Map();
   private networkCallbacks: Map<number, Map<number, NetworkEventCallback>> = new Map();
   private networkRequestStartTimes: Map<string, number> = new Map();
   private pendingDialogs: Map<number, PendingDialog> = new Map();
+  private networkEntrySeq = 0; // Sequence counter for unique IDs
   private static debuggerListenerRegistered = false;
+
+  // Body fetch settings
+  private static readonly MAX_INLINE_BODY_SIZE = 16 * 1024; // 16KB
+  private static readonly STATIC_ASSET_TYPES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon',
+    'font/woff', 'font/woff2', 'font/ttf', 'font/otf', 'application/font-woff', 'application/font-woff2',
+    'text/css', 'application/javascript', 'text/javascript', 'application/x-javascript',
+  ]);
+  private static readonly BINARY_TYPES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon',
+    'font/woff', 'font/woff2', 'font/ttf', 'font/otf', 'application/font-woff', 'application/font-woff2',
+    'application/octet-stream', 'application/pdf', 'application/zip',
+    'audio/mpeg', 'audio/wav', 'audio/ogg',
+    'video/mp4', 'video/webm', 'video/ogg',
+  ]);
 
   async attach(tabId: number): Promise<void> {
     if (this.targets.has(tabId)) return;
@@ -128,6 +181,7 @@ export class CDPController {
       this.targets.delete(tabId);
       this.consoleMessages.delete(tabId);
       this.networkRequests.delete(tabId);
+      this.networkEntries.delete(tabId);
       this.consoleCallbacks.delete(tabId);
       this.networkCallbacks.delete(tabId);
       this.pendingDialogs.delete(tabId);
@@ -157,6 +211,7 @@ export class CDPController {
         this.targets.delete(tabId);
         this.consoleMessages.delete(tabId);
         this.networkRequests.delete(tabId);
+        this.networkEntries.delete(tabId);
         this.consoleCallbacks.delete(tabId);
         this.networkCallbacks.delete(tabId);
       }
@@ -179,6 +234,9 @@ export class CDPController {
         break;
       case "Network.loadingFailed":
         this.handleNetworkFailed(tabId, params);
+        break;
+      case "Network.loadingFinished":
+        this.handleLoadingFinished(tabId, params);
         break;
       case "Page.javascriptDialogOpening":
         this.handleDialogOpening(tabId, params);
@@ -253,9 +311,10 @@ export class CDPController {
     const req = params.request;
     if (!req) return;
 
-    const timestamp = params.timestamp || Date.now();
+    const timestamp = params.timestamp ? params.timestamp * 1000 : Date.now();
     this.networkRequestStartTimes.set(params.requestId, timestamp);
 
+    // Legacy format for backward compatibility
     requests.push({
       requestId: params.requestId,
       url: req.url,
@@ -266,6 +325,54 @@ export class CDPController {
 
     if (requests.length > 500) requests.shift();
     this.networkRequests.set(tabId, requests);
+
+    // Full NetworkEntry format
+    if (!this.networkEntries.has(tabId)) {
+      this.networkEntries.set(tabId, new Map());
+    }
+    const entriesMap = this.networkEntries.get(tabId)!;
+    
+    // Generate unique ID
+    const seq = ++this.networkEntrySeq;
+    const entryId = `r_${timestamp}_${seq}`;
+
+    // Extract headers as Record
+    const requestHeaders: Record<string, string> = {};
+    if (req.headers) {
+      for (const [key, value] of Object.entries(req.headers)) {
+        requestHeaders[key] = String(value);
+      }
+    }
+
+    // Extract request body info
+    const requestBody = req.postData;
+    const requestBodySize = requestBody ? requestBody.length : undefined;
+
+    const entry: NetworkEntry = {
+      id: entryId,
+      ts: timestamp,
+      method: req.method,
+      url: req.url,
+      origin: this.extractOrigin(req.url),
+      requestHeaders,
+      requestBody,
+      requestBodySize,
+      tabId,
+      tabUrl: params.documentURL,
+      type: params.type,
+      flags: [],
+      _requestId: params.requestId,
+      _responseReceived: false,
+      _loadingFinished: false,
+    };
+
+    // Limit entries per tab
+    if (entriesMap.size > 500) {
+      const oldestKey = entriesMap.keys().next().value;
+      if (oldestKey) entriesMap.delete(oldestKey);
+    }
+    
+    entriesMap.set(params.requestId, entry);
   }
 
   private handleNetworkResponse(tabId: number, params: any): void {
@@ -279,7 +386,8 @@ export class CDPController {
         const startTime = this.networkRequestStartTimes.get(params.requestId);
         const now = Date.now();
         const duration = startTime ? Math.round(now - startTime) : undefined;
-        this.networkRequestStartTimes.delete(params.requestId);
+        // Don't delete start time yet - we need it for loadingFinished
+        // this.networkRequestStartTimes.delete(params.requestId);
 
         for (const cb of callbacks.values()) {
           cb({
@@ -291,6 +399,47 @@ export class CDPController {
           });
         }
       }
+    }
+
+    // Update full NetworkEntry
+    const entriesMap = this.networkEntries.get(tabId);
+    const entry = entriesMap?.get(params.requestId);
+    if (entry && params.response) {
+      const response = params.response;
+      
+      // Calculate TTFB (time to first byte)
+      const startTime = this.networkRequestStartTimes.get(params.requestId);
+      const now = params.timestamp ? params.timestamp * 1000 : Date.now();
+      if (startTime) {
+        entry.ttfb = Math.round(now - startTime);
+      }
+      
+      entry.status = response.status;
+      entry.statusText = response.statusText;
+      entry.mimeType = response.mimeType;
+      
+      // Extract response headers
+      const responseHeaders: Record<string, string> = {};
+      if (response.headers) {
+        for (const [key, value] of Object.entries(response.headers)) {
+          responseHeaders[key] = String(value);
+        }
+      }
+      entry.responseHeaders = responseHeaders;
+      
+      // Check if binary type
+      if (this.isBinaryType(response.mimeType)) {
+        entry.flags.push('binary');
+      }
+      
+      // Check for protobuf
+      if (response.mimeType?.includes('protobuf') || 
+          response.mimeType?.includes('x-protobuf') ||
+          response.mimeType?.includes('application/grpc')) {
+        entry.flags.push('protobuf');
+      }
+      
+      entry._responseReceived = true;
     }
   }
 
@@ -318,6 +467,22 @@ export class CDPController {
         }
       }
     }
+
+    // Update full NetworkEntry
+    const entriesMap = this.networkEntries.get(tabId);
+    const entry = entriesMap?.get(params.requestId);
+    if (entry) {
+      const startTime = this.networkRequestStartTimes.get(params.requestId);
+      const now = params.timestamp ? params.timestamp * 1000 : Date.now();
+      if (startTime) {
+        entry.duration = Math.round(now - startTime);
+      }
+      this.networkRequestStartTimes.delete(params.requestId);
+      
+      entry.status = 0;
+      entry.flags.push('failed');
+      entry._loadingFinished = true;
+    }
   }
 
   private handleDialogOpening(tabId: number, params: any): void {
@@ -327,6 +492,81 @@ export class CDPController {
       defaultPrompt: params.defaultPrompt,
       timestamp: Date.now(),
     });
+  }
+
+  private async handleLoadingFinished(tabId: number, params: any): Promise<void> {
+    const entriesMap = this.networkEntries.get(tabId);
+    const entry = entriesMap?.get(params.requestId);
+    if (!entry) return;
+
+    // Calculate total duration
+    const startTime = this.networkRequestStartTimes.get(params.requestId);
+    const now = params.timestamp ? params.timestamp * 1000 : Date.now();
+    if (startTime) {
+      entry.duration = Math.round(now - startTime);
+    }
+    this.networkRequestStartTimes.delete(params.requestId);
+
+    // Set response body size from encoded data length
+    entry.responseBodySize = params.encodedDataLength;
+    entry._loadingFinished = true;
+
+    // Decide whether to fetch body inline
+    const shouldFetchBody = 
+      !this.isStaticAsset(entry.mimeType) &&
+      !this.isBinaryType(entry.mimeType) &&
+      (params.encodedDataLength || 0) <= CDPController.MAX_INLINE_BODY_SIZE;
+
+    if (shouldFetchBody) {
+      try {
+        const result = await this.send(tabId, "Network.getResponseBody", {
+          requestId: params.requestId,
+        });
+        
+        if (result.base64Encoded) {
+          // Decode base64 for text content
+          try {
+            entry.responseBody = atob(result.body);
+          } catch {
+            entry.responseBody = result.body;
+            entry.flags.push('binary');
+          }
+        } else {
+          entry.responseBody = result.body;
+        }
+        
+        // Check if truncated
+        if (entry.responseBody && entry.responseBody.length > CDPController.MAX_INLINE_BODY_SIZE) {
+          entry.responseBody = entry.responseBody.slice(0, CDPController.MAX_INLINE_BODY_SIZE);
+          entry.flags.push('truncated');
+        }
+      } catch (e) {
+        // Body may not be available (e.g., cached, redirected)
+        // This is not an error - just means no body to capture
+      }
+    }
+  }
+
+  // Helper: Extract origin from URL
+  private extractOrigin(url: string): string {
+    try {
+      const parsed = new URL(url);
+      return parsed.origin;
+    } catch {
+      return '';
+    }
+  }
+
+  // Helper: Check if MIME type is a static asset (skip body fetch)
+  private isStaticAsset(mimeType?: string): boolean {
+    if (!mimeType) return false;
+    return CDPController.STATIC_ASSET_TYPES.has(mimeType);
+  }
+
+  // Helper: Check if MIME type is binary
+  private isBinaryType(mimeType?: string): boolean {
+    if (!mimeType) return false;
+    return CDPController.BINARY_TYPES.has(mimeType);
   }
 
   async enableConsoleTracking(tabId: number): Promise<void> {
@@ -615,6 +855,77 @@ export class CDPController {
 
   clearNetworkRequests(tabId: number): void {
     this.networkRequests.set(tabId, []);
+    this.networkEntries.set(tabId, new Map());
+  }
+
+  /**
+   * Get all full network entries for a tab
+   */
+  getNetworkEntries(
+    tabId: number,
+    options?: {
+      urlPattern?: string;
+      limit?: number;
+      includeStatic?: boolean;
+    }
+  ): NetworkEntry[] {
+    const entriesMap = this.networkEntries.get(tabId);
+    if (!entriesMap) return [];
+
+    let entries = Array.from(entriesMap.values());
+
+    // Filter out static assets by default
+    if (!options?.includeStatic) {
+      entries = entries.filter(e => !this.isStaticAsset(e.mimeType));
+    }
+
+    if (options?.urlPattern) {
+      entries = entries.filter((e) => e.url.includes(options.urlPattern!));
+    }
+
+    if (options?.limit) {
+      entries = entries.slice(-options.limit);
+    }
+
+    return entries;
+  }
+
+  /**
+   * Get a single network entry by request ID
+   */
+  getNetworkEntry(tabId: number, requestId: string): NetworkEntry | null {
+    const entriesMap = this.networkEntries.get(tabId);
+    return entriesMap?.get(requestId) || null;
+  }
+
+  /**
+   * Fetch response body on demand via CDP
+   * Use this for bodies that weren't fetched inline (large or binary)
+   */
+  async getResponseBody(tabId: number, requestId: string): Promise<{
+    success: boolean;
+    body?: string;
+    base64Encoded?: boolean;
+    error?: string;
+  }> {
+    await this.ensureAttached(tabId);
+    
+    try {
+      const result = await this.send(tabId, "Network.getResponseBody", {
+        requestId,
+      });
+      
+      return {
+        success: true,
+        body: result.body,
+        base64Encoded: result.base64Encoded,
+      };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   }
 
   subscribeToConsole(tabId: number, streamId: number, callback: ConsoleEventCallback): void {

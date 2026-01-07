@@ -613,6 +613,87 @@ function mapToolToMessage(tool, args, tabId) {
         ...baseMsg 
       };
     case "network":
+    case "get_network_entries":
+      return { 
+        type: "GET_NETWORK_ENTRIES", 
+        origin: a.origin,
+        method: a.method,
+        status: a.status,
+        contentType: a.type,
+        since: a.since,
+        last: a.last,
+        hasBody: a["has-body"] || a.hasBody,
+        excludeStatic: a["exclude-static"] || a.excludeStatic,
+        urlPattern: a.filter || a.url_pattern,
+        format: a.format || 'compact',
+        verbose: a.v ? 1 : (a.vv ? 2 : 0),
+        all: a.all,
+        clear: a.clear,
+        limit: a.limit,
+        ...baseMsg 
+      };
+
+    case "network.get":
+    case "get_network_entry":
+      return { 
+        type: "GET_NETWORK_ENTRY", 
+        requestId: a.id || args[0],
+        ...baseMsg 
+      };
+
+    case "network.body":
+      return { 
+        type: "GET_RESPONSE_BODY", 
+        requestId: a.id || args[0],
+        isRequest: a.request,
+        ...baseMsg 
+      };
+
+    case "network.curl":
+      return { 
+        type: "GET_NETWORK_ENTRY", 
+        requestId: a.id || args[0],
+        formatAsCurl: true,
+        ...baseMsg 
+      };
+
+    case "network.origins":
+      return { 
+        type: "GET_NETWORK_ORIGINS",
+        byTab: a["by-tab"] || a.byTab,
+        ...baseMsg 
+      };
+
+    case "network.clear":
+      return { 
+        type: "CLEAR_NETWORK_REQUESTS",
+        before: a.before,
+        origin: a.origin,
+        ...baseMsg 
+      };
+
+    case "network.stats":
+      return { 
+        type: "GET_NETWORK_STATS",
+        ...baseMsg 
+      };
+
+    case "network.export":
+      return { 
+        type: "EXPORT_NETWORK_REQUESTS",
+        har: a.har,
+        jsonl: a.jsonl,
+        output: a.output,
+        ...baseMsg 
+      };
+
+    case "network.path":
+      return { 
+        type: "GET_NETWORK_PATHS",
+        requestId: a.id || args[0],
+        ...baseMsg 
+      };
+
     case "read_network_requests":
       return { 
         type: "READ_NETWORK_REQUESTS", 

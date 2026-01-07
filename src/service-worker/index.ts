@@ -1406,6 +1406,21 @@ async function handleMessage(
         await cdp.enableNetworkTracking(tabId);
       } catch (e) {}
 
+      // If full flag is passed, use getNetworkEntries for rich data
+      if (message.full) {
+        const entries = cdp.getNetworkEntries(tabId, {
+          urlPattern: message.urlPattern,
+        });
+        
+        if (message.clear) {
+          cdp.clearNetworkRequests(tabId);
+        }
+        
+        // Return entries sliced to limit
+        const limit = message.limit || 100;
+        return { entries: entries.slice(0, limit) };
+      }
+
       const requests = cdp.getNetworkRequests(tabId, {
         urlPattern: message.urlPattern,
         limit: message.limit || 100,
@@ -1422,6 +1437,85 @@ async function handleMessage(
       if (!tabId) throw new Error("No tabId provided");
       cdp.clearNetworkRequests(tabId);
       return { success: true };
+    }
+
+    case "GET_NETWORK_ENTRIES": {
+      if (!tabId) throw new Error("No tabId provided");
+      
+      try {
+        await cdp.enableNetworkTracking(tabId);
+      } catch (e) {}
+      
+      let entries = cdp.getNetworkEntries(tabId, {
+        urlPattern: message.urlPattern,
+        includeStatic: !message.excludeStatic,
+      });
+      
+      // Apply additional filters
+      if (message.origin) {
+        entries = entries.filter(e => e.origin === message.origin);
+      }
+      if (message.method) {
+        entries = entries.filter(e => e.method === message.method);
+      }
+      if (message.status) {
+        entries = entries.filter(e => e.status === message.status);
+      }
+      if (message.type) {
+        entries = entries.filter(e => e.type === message.type);
+      }
+      if (message.since) {
+        entries = entries.filter(e => e.ts >= message.since);
+      }
+      if (message.hasBody !== undefined) {
+        entries = entries.filter(e => message.hasBody ? (e.responseBodySize && e.responseBodySize > 0) : !e.responseBodySize);
+      }
+      if (message.last) {
+        entries = entries.slice(-message.last);
+      }
+      
+      if (message.clear) {
+        cdp.clearNetworkRequests(tabId);
+      }
+      
+      return { entries };
+    }
+
+    case "GET_NETWORK_ENTRY": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.requestId) throw new Error("No requestId provided");
+      
+      const entry = cdp.getNetworkEntry(tabId, message.requestId);
+      if (!entry) {
+        return { error: `Entry not found: ${message.requestId}` };
+      }
+      return { entry };
+    }
+
+    case "GET_RESPONSE_BODY": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.requestId) throw new Error("No requestId provided");
+      
+      const result = await cdp.getResponseBody(tabId, message.requestId);
+      return result;
+    }
+
+    case "GET_NETWORK_ORIGINS": {
+      if (!tabId) throw new Error("No tabId provided");
+      
+      const entries = cdp.getNetworkEntries(tabId, {});
+      const origins: Record<string, { count: number; lastSeen: number; size: number }> = {};
+      
+      for (const entry of entries) {
+        if (!origins[entry.origin]) {
+          origins[entry.origin] = { count: 0, lastSeen: 0, size: 0 };
+        }
+        origins[entry.origin].count++;
+        origins[entry.origin].lastSeen = Math.max(origins[entry.origin].lastSeen, entry.ts);
+        origins[entry.origin].size += (entry.responseBodySize || 0);
+      }
+      
+      return { origins };
     }
 
     case "RESIZE_WINDOW": {

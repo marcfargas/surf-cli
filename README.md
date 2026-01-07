@@ -25,6 +25,8 @@ Surf takes a different approach:
 
 **AI Without API Keys** - Query ChatGPT and Gemini using your browser's logged-in session. No API keys, no rate limits, no cost.
 
+**Network Capture** - Automatically logs all network requests while active. Filter, search, and replay API calls without manually setting up request interception.
+
 ## Comparison
 
 | Feature | Surf | Manus | Claude Extension | DevTools MCP | dev-browser |
@@ -187,6 +189,38 @@ surf console                        # Read console messages
 surf network                        # Read network requests
 ```
 
+### Network Capture
+
+Surf automatically captures all network requests while active. No explicit start needed.
+
+```bash
+# Overview (token-efficient for LLMs)
+surf network                          # Recent requests, compact table
+surf network --urls                   # Just URLs (minimal output)
+surf network --format curl            # As curl commands
+
+# Filtering
+surf network --origin api.github.com  # Filter by origin/domain
+surf network --method POST            # Only POST requests
+surf network --type json              # Only JSON responses
+surf network --status 4xx,5xx         # Only errors
+surf network --since 5m               # Last 5 minutes
+surf network --exclude-static         # Skip images/fonts/css/js
+
+# Drill down
+surf network.get r_001                # Full request/response details
+surf network.body r_001               # Response body (for piping to jq)
+surf network.curl r_001               # Generate curl command
+surf network.origins                  # List captured domains
+
+# Management
+surf network.clear                    # Clear captured data
+surf network.stats                    # Capture statistics
+```
+
+Storage location: `/tmp/surf/` (override with `--network-path` or `SURF_NETWORK_PATH` env).
+Auto-cleanup: 24 hours TTL, 200MB max.
+
 ## Global Options
 
 ```bash
@@ -195,6 +229,7 @@ surf network                        # Read network requests
 --soft-fail       # Warn instead of error (exit 0) on restricted pages
 --no-screenshot   # Skip auto-screenshot after actions
 --full            # Full resolution screenshots (skip resize)
+--network-path <path>  # Custom path for network logs (default: /tmp/surf, or SURF_NETWORK_PATH env)
 ```
 
 ## Socket API
@@ -218,6 +253,7 @@ echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list"
 | `history.*` | `list`, `search` |
 | `dialog.*` | `accept`, `dismiss`, `info` |
 | `emulate.*` | `network`, `cpu`, `geo` |
+| `network.*` | `get`, `body`, `curl`, `origins`, `clear`, `stats`, `export`, `path` |
 
 ## Aliases
 
