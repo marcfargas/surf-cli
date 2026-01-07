@@ -345,6 +345,11 @@ const TOOLS = {
           { cmd: "console --stream", desc: "Stream live" },
         ]
       },
+    }
+  },
+  network: {
+    desc: "Network capture",
+    commands: {
       "network": { 
         desc: "List captured network requests", 
         args: [], 
