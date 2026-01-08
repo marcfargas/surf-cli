@@ -94,6 +94,22 @@ const TOOLS = {
           { cmd: 'gemini "summarize this video" --youtube "https://youtube.com/..."', desc: "YouTube analysis" },
         ]
       },
+      "perplexity": {
+        desc: "Search with Perplexity AI (uses browser session)",
+        args: ["query"],
+        opts: {
+          "with-page": "Include current page context",
+          mode: "Mode: search (default), research",
+          model: "Model (Pro users): sonar, gpt-4o, claude, etc.",
+          timeout: "Timeout in seconds (default: 120)"
+        },
+        examples: [
+          { cmd: 'perplexity "what is quantum computing"', desc: "Basic search" },
+          { cmd: 'perplexity "explain this page" --with-page', desc: "With page context" },
+          { cmd: 'perplexity "deep dive into transformers" --mode research', desc: "Research mode" },
+          { cmd: 'perplexity "latest AI news" --model sonar', desc: "Specify model (Pro)" },
+        ]
+      },
       "ai": { 
         desc: "Analyze page with AI (requires GOOGLE_API_KEY)", 
         args: ["query"], 
@@ -228,12 +244,13 @@ const TOOLS = {
     desc: "Page inspection",
     commands: {
       "page.read": { 
-        desc: "Get accessibility tree", 
+        desc: "Get accessibility tree + visible text", 
         args: [], 
-        opts: { all: "Include all elements", ref: "Get specific element" },
+        opts: { all: "Include all elements", ref: "Get specific element", "no-text": "Exclude visible text content" },
         examples: [
-          { cmd: "page.read", desc: "Interactive elements only" },
-          { cmd: "page.read --all", desc: "All elements" },
+          { cmd: "page.read", desc: "Interactive elements + text content" },
+          { cmd: "page.read --all", desc: "All elements + text" },
+          { cmd: "page.read --no-text", desc: "Interactive elements only (no text)" },
           { cmd: "read", desc: "Alias" },
         ]
       },
@@ -1385,6 +1402,7 @@ const PRIMARY_ARG_MAP = {
   ai: "query",
   gemini: "query",
   chatgpt: "query",
+  perplexity: "query",
   navigate: "url",
   go: "url",
   js: "code",
@@ -1706,7 +1724,8 @@ const socket = net.createConnection(SOCKET_PATH, () => {
   socket.write(JSON.stringify(request) + "\n");
 });
 
-const requestTimeout = tool === "smoke" ? 300000 : 30000;
+const AI_TOOLS = ["smoke", "chatgpt", "gemini", "perplexity", "ai"];
+const requestTimeout = AI_TOOLS.includes(tool) ? 300000 : 30000;
 const timeout = setTimeout(() => {
   console.error(`Error: Request timed out (${requestTimeout / 1000}s)`);
   socket.destroy();
@@ -1771,6 +1790,7 @@ async function handleResponse(response) {
   }
 
   const result = response.result?.content?.[0]?.text;
+  
   let data;
   try {
     data = result ? JSON.parse(result) : response.result;
@@ -1928,6 +1948,21 @@ async function handleResponse(response) {
     for (const [key, val] of Object.entries(data.paths)) {
       console.log(`${key}: ${val}`);
     }
+  } else if ((tool === "chatgpt" || tool === "gemini") && data?.response) {
+    console.log(data.response);
+    if (data.imagePath) {
+      console.log(`\nImage saved: ${data.imagePath}`);
+    }
+    console.error(`\n[${data.model || 'unknown'} | ${((data.tookMs || 0) / 1000).toFixed(1)}s]`);
+  } else if (tool === "perplexity" && data?.response) {
+    console.log(data.response);
+    const meta = [];
+    if (data.sources) meta.push(`${data.sources} sources`);
+    if (data.mode) meta.push(data.mode);
+    if (data.model && data.model !== 'default') meta.push(data.model);
+    meta.push(`${((data.tookMs || 0) / 1000).toFixed(1)}s`);
+    console.error(`\n[${meta.join(' | ')}]`);
+    if (data.url) console.error(`URL: ${data.url}`);
   } else if (typeof data === "string") {
     console.log(data);
   } else if (data?.success === true) {

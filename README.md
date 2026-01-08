@@ -23,7 +23,7 @@ Surf takes a different approach:
 
 **Smart Defaults** - Screenshots auto-resize to 1200px (saves tokens). Actions auto-capture screenshots (saves round-trips). Errors on restricted pages warn instead of fail.
 
-**AI Without API Keys** - Query ChatGPT and Gemini using your browser's logged-in session. No API keys, no rate limits, no cost.
+**AI Without API Keys** - Query ChatGPT, Gemini, and Perplexity using your browser's logged-in session. No API keys, no rate limits, no cost.
 
 **Network Capture** - Automatically logs all network requests while active. Filter, search, and replay API calls without manually setting up request interception.
 
@@ -108,8 +108,9 @@ surf tab.reload --hard
 ### Reading Pages
 
 ```bash
-surf read                           # Accessibility tree with element refs
-surf page.text                      # Raw text content
+surf read                           # Accessibility tree + visible text content
+surf read --no-text                 # Accessibility tree only (no text)
+surf page.text                      # Raw text content only
 surf page.state                     # Modals, loading state, scroll position
 ```
 
@@ -172,9 +173,15 @@ surf gemini "a robot surfing" --generate-image /tmp/robot.png # Generate image
 surf gemini "add sunglasses" --edit-image photo.jpg --output out.jpg
 surf gemini "summarize" --youtube "https://youtube.com/..."   # YouTube analysis
 surf gemini "hello" --model gemini-2.5-flash                  # Model selection
+
+# Perplexity
+surf perplexity "what is quantum computing"
+surf perplexity "explain this page" --with-page               # Include page context
+surf perplexity "deep dive" --mode research                   # Research mode (Pro)
+surf perplexity "latest news" --model sonar                   # Model selection (Pro)
 ```
 
-Requires being logged into chatgpt.com or gemini.google.com in Chrome.
+Requires being logged into chatgpt.com, gemini.google.com, or perplexity.ai in Chrome.
 
 ### Waiting
 

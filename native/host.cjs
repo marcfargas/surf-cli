@@ -7,6 +7,7 @@ const https = require("https");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const chatgptClient = require("./chatgpt-client.cjs");
 const geminiClient = require("./gemini-client.cjs");
+const perplexityClient = require("./perplexity-client.cjs");
 const networkFormatters = require("./formatters/network.cjs");
 const networkStore = require("./network-store.cjs");
 
@@ -398,6 +399,11 @@ function formatToolContent(result) {
       return text(`Error: ${result.error}\n\n${output}`);
     }
     
+    // Include page text content if requested via --text flag
+    if (result.text) {
+      output += `\n\n--- Page Text ---\n${result.text}`;
+    }
+    
     if (result.screenshot && result.screenshot.base64) {
       const dims = result.screenshot.width && result.screenshot.height 
         ? `${result.screenshot.width}x${result.screenshot.height}` 
@@ -408,6 +414,7 @@ function formatToolContent(result) {
         { type: "image", data: result.screenshot.base64, mimeType: "image/png" }
       ];
     }
+    
     return text(output);
   }
   
@@ -862,7 +869,7 @@ function mapToolToMessage(tool, args, tabId) {
       const files = a.files ? (typeof a.files === "string" ? a.files.split(",").map(f => f.trim()) : a.files) : [];
       return { type: "UPLOAD_FILE", ref: a.ref, files, ...baseMsg };
     case "page.read":
-      return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref }, ...baseMsg };
+      return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref, includeText: a["no-text"] !== true }, ...baseMsg };
     case "page.text":
       return { type: "GET_PAGE_TEXT", ...baseMsg };
     case "page.state":
@@ -1002,6 +1009,17 @@ function mapToolToMessage(tool, args, tabId) {
         youtube: a.youtube,
         aspectRatio: a["aspect-ratio"],
         timeout: a.timeout ? parseInt(a.timeout, 10) * 1000 : 300000,
+        ...baseMsg
+      };
+    case "perplexity":
+      if (!a.query) throw new Error("query required");
+      return {
+        type: "PERPLEXITY_QUERY",
+        query: a.query,
+        mode: a.mode || "search",
+        model: a.model,
+        withPage: a["with-page"],
+        timeout: a.timeout ? parseInt(a.timeout, 10) * 1000 : 120000,
         ...baseMsg
       };
     default:
@@ -1322,6 +1340,100 @@ function handleToolRequest(msg, socket) {
     }).then((result) => {
       sendToolResponse(socket, originalId, {
         response: result.response,
+        model: result.model,
+        tookMs: result.tookMs
+      }, null);
+    }).catch((err) => {
+      sendToolResponse(socket, originalId, null, err.message);
+    });
+    
+    return;
+  }
+  
+  if (extensionMsg.type === "PERPLEXITY_QUERY") {
+    const { query, mode, model, withPage, timeout } = extensionMsg;
+    
+    queueAiRequest(async () => {
+      let pageContext = null;
+      if (withPage) {
+        const pageResult = await new Promise((resolve) => {
+          const pageId = ++requestCounter;
+          pendingToolRequests.set(pageId, {
+            socket: null,
+            originalId: null,
+            tool: "read_page",
+            onComplete: resolve
+          });
+          writeMessage({ type: "GET_PAGE_TEXT", tabId: extensionMsg.tabId, id: pageId });
+        });
+        if (pageResult && !pageResult.error) {
+          pageContext = {
+            url: pageResult.url,
+            text: pageResult.text || pageResult.pageContent || ""
+          };
+        }
+      }
+      
+      let fullPrompt = query;
+      if (pageContext) {
+        fullPrompt = `Page: ${pageContext.url}\n\n${pageContext.text}\n\n---\n\n${query}`;
+      }
+      
+      const result = await perplexityClient.query({
+        prompt: fullPrompt,
+        mode: mode || 'search',
+        model,
+        timeout: timeout || 120000,
+        createTab: () => new Promise((resolve) => {
+          const tabCreateId = ++requestCounter;
+          pendingToolRequests.set(tabCreateId, {
+            socket: null,
+            originalId: null,
+            tool: "create_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "PERPLEXITY_NEW_TAB", id: tabCreateId });
+        }),
+        closeTab: (tabIdToClose) => new Promise((resolve) => {
+          const tabCloseId = ++requestCounter;
+          pendingToolRequests.set(tabCloseId, {
+            socket: null,
+            originalId: null,
+            tool: "close_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "PERPLEXITY_CLOSE_TAB", tabId: tabIdToClose, id: tabCloseId });
+        }),
+        cdpEvaluate: (tabId, expression) => new Promise((resolve) => {
+          const evalId = ++requestCounter;
+          pendingToolRequests.set(evalId, {
+            socket: null,
+            originalId: null,
+            tool: "cdp_evaluate",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "PERPLEXITY_EVALUATE", tabId, expression, id: evalId });
+        }),
+        cdpCommand: (tabId, method, params) => new Promise((resolve) => {
+          const cmdId = ++requestCounter;
+          pendingToolRequests.set(cmdId, {
+            socket: null,
+            originalId: null,
+            tool: "cdp_command",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "PERPLEXITY_CDP_COMMAND", tabId, method, params, id: cmdId });
+        }),
+        log: (msg) => log(`[perplexity] ${msg}`)
+      });
+      
+      return result;
+    }).then((result) => {
+      sendToolResponse(socket, originalId, {
+        response: result.response,
+        sources: result.sources,
+        url: result.url,
+        mode: result.mode,
         model: result.model,
         tookMs: result.tookMs
       }, null);

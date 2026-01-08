@@ -215,6 +215,34 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+/**
+ * Wait for JavaScript runtime to be ready in a newly created/attached tab.
+ * This is needed because document.readyState === 'complete' doesn't mean
+ * React/Vue/etc frameworks have finished hydrating.
+ */
+async function waitForRuntimeReady(tabId: number, timeoutMs = 10000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+  
+  // Poll until we can successfully evaluate JS
+  while (Date.now() < deadline) {
+    try {
+      const result = await cdp.evaluateScript(tabId, "document.readyState");
+      if (result?.result?.value === "complete") {
+        // Extra delay for framework hydration (React, Vue, etc.)
+        await delay(1500);
+        return;
+      }
+    } catch {
+      // CDP not ready yet, continue polling
+    }
+    await delay(200);
+  }
+  
+  // Timeout but proceed anyway - the page might still work
+  console.warn(`waitForRuntimeReady timed out for tab ${tabId}`);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
@@ -726,6 +754,18 @@ async function handleMessage(
         try {
           await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" });
         } catch (e) {}
+      }
+      
+      // Include visible text content if requested
+      if (message.options?.includeText) {
+        try {
+          const textResult = await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_TEXT" }, { frameId: 0 });
+          if (textResult?.text) {
+            result.text = textResult.text;
+          }
+        } catch (err) {
+          // Ignore text extraction errors
+        }
       }
       
       if (message.options?.includeScreenshot) {
@@ -2210,6 +2250,8 @@ async function handleMessage(
         });
       }
       await cdp.attach(tab.id);
+      // Wait for JS runtime to be ready after CDP attach
+      await waitForRuntimeReady(tab.id, 10000);
       return { tabId: tab.id };
     }
 
@@ -2233,6 +2275,58 @@ async function handleMessage(
     }
 
     case "CHATGPT_EVALUATE": {
+      const result = await cdp.evaluateScript(message.tabId, message.expression);
+      return result;
+    }
+
+    case "PERPLEXITY_NEW_TAB": {
+      const tab = await chrome.tabs.create({
+        url: "https://www.perplexity.ai/",
+        active: true,
+      });
+      if (!tab.id) throw new Error("Failed to create tab");
+      const currentTab = await chrome.tabs.get(tab.id);
+      if (currentTab.status !== "complete") {
+        await new Promise<void>((resolve) => {
+          const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+            if (tabId === tab.id && info.status === "complete") {
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(listener);
+          setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }, 30000);
+        });
+      }
+      await cdp.attach(tab.id);
+      // Wait for JS runtime to be ready after CDP attach
+      await waitForRuntimeReady(tab.id, 10000);
+      return { tabId: tab.id };
+    }
+
+    case "PERPLEXITY_CLOSE_TAB": {
+      const pplxTabId = message.tabId;
+      if (pplxTabId) {
+        try {
+          await cdp.detach(pplxTabId);
+        } catch {}
+        try {
+          await chrome.tabs.remove(pplxTabId);
+        } catch {}
+      }
+      return { success: true };
+    }
+
+    case "PERPLEXITY_CDP_COMMAND": {
+      const { method, params } = message;
+      const result = await cdp.sendCommand(message.tabId, method, params || {});
+      return result;
+    }
+
+    case "PERPLEXITY_EVALUATE": {
       const result = await cdp.evaluateScript(message.tabId, message.expression);
       return result;
     }
@@ -2286,7 +2380,10 @@ const COMMANDS_WITHOUT_TAB = new Set([
   "TABS_REGISTER", "TABS_UNREGISTER", "TABS_LIST_NAMED", "TABS_GET_BY_NAME",
   "CREATE_TAB_GROUP", "UNGROUP_TABS", "LIST_TAB_GROUPS", "GET_HISTORY", "SEARCH_HISTORY",
   "GET_COOKIES", "SET_COOKIE", "DELETE_COOKIES", "GET_BOOKMARKS", "ADD_BOOKMARK", 
-  "DELETE_BOOKMARK", "DIALOG_DISMISS", "DIALOG_ACCEPT", "DIALOG_INFO"
+  "DELETE_BOOKMARK", "DIALOG_DISMISS", "DIALOG_ACCEPT", "DIALOG_INFO",
+  "CHATGPT_NEW_TAB", "CHATGPT_CLOSE_TAB", "CHATGPT_EVALUATE", "CHATGPT_CDP_COMMAND",
+  "GET_CHATGPT_COOKIES", "GET_GOOGLE_COOKIES",
+  "PERPLEXITY_NEW_TAB", "PERPLEXITY_CLOSE_TAB", "PERPLEXITY_EVALUATE", "PERPLEXITY_CDP_COMMAND"
 ]);
 
 initNativeMessaging(async (msg) => {
