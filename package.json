@@ -30,6 +30,7 @@
   "devDependencies": {
     "@types/chrome": "^0.0.287",
     "@vitest/coverage-v8": "^4.0.16",
+    "@vitest/ui": "^4.0.16",
     "typescript": "^5.7.2",
     "vite": "^6.0.0",
     "vitest": "^4.0.16"
