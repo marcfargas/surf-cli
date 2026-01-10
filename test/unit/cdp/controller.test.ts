@@ -137,4 +137,121 @@ describe("CDPController", () => {
       expect(dialog).toBeNull();
     });
   });
+
+  describe("attach", () => {
+    let controller: CDPController;
+    const tabId = 100;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("attaches debugger to tab", async () => {
+      await controller.attach(tabId);
+
+      expect(mockChrome.debugger.attach).toHaveBeenCalledWith({ tabId }, "1.3");
+    });
+
+    it("enables Page domain after attaching", async () => {
+      await controller.attach(tabId);
+
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Page.enable",
+        undefined,
+      );
+    });
+
+    it("does not attach twice to same tab", async () => {
+      await controller.attach(tabId);
+      await controller.attach(tabId);
+
+      expect(mockChrome.debugger.attach).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws descriptive error for restricted pages", async () => {
+      mockChrome.debugger.attach.mockRejectedValue(new Error("Cannot access a chrome:// URL"));
+
+      let error: Error | undefined;
+      try {
+        await controller.attach(tabId);
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain("Cannot control this page");
+    });
+
+    it("throws descriptive error when attach fails", async () => {
+      mockChrome.debugger.attach.mockRejectedValue(new Error("Some other error"));
+
+      let error: Error | undefined;
+      try {
+        await controller.attach(tabId);
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error).toBeDefined();
+      expect(error?.message).toBe("Failed to attach debugger: Some other error");
+    });
+  });
+
+  describe("detach", () => {
+    let controller: CDPController;
+    const tabId = 200;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.detach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("detaches debugger from attached tab", async () => {
+      await controller.attach(tabId);
+      await controller.detach(tabId);
+
+      expect(mockChrome.debugger.detach).toHaveBeenCalledWith({ tabId });
+    });
+
+    it("does nothing for tab that was never attached", async () => {
+      await controller.detach(tabId);
+
+      expect(mockChrome.debugger.detach).not.toHaveBeenCalled();
+    });
+
+    it("clears tab data after detaching", async () => {
+      await controller.attach(tabId);
+      await controller.detach(tabId);
+
+      // After detach, getConsoleMessages returns empty
+      expect(controller.getConsoleMessages(tabId)).toStrictEqual([]);
+      expect(controller.getNetworkRequests(tabId)).toStrictEqual([]);
+    });
+  });
+
+  describe("detachAll", () => {
+    let controller: CDPController;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.detach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("detaches all attached tabs", async () => {
+      await controller.attach(301);
+      await controller.attach(302);
+      await controller.attach(303);
+
+      await controller.detachAll();
+
+      expect(mockChrome.debugger.detach).toHaveBeenCalledTimes(3);
+    });
+  });
 });
