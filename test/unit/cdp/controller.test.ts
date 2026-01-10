@@ -389,4 +389,112 @@ describe("CDPController", () => {
       );
     });
   });
+
+  describe("getViewportSize", () => {
+    let controller: CDPController;
+    const tabId = 800;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+    });
+
+    it("returns viewport dimensions from visualViewport", async () => {
+      mockChrome.debugger.sendCommand.mockResolvedValue({
+        visualViewport: { clientWidth: 1280, clientHeight: 720 },
+      });
+
+      const result = await controller.getViewportSize(tabId);
+
+      expect(result).toStrictEqual({ width: 1280, height: 720 });
+    });
+
+    it("falls back to layoutViewport", async () => {
+      mockChrome.debugger.sendCommand.mockResolvedValue({
+        layoutViewport: { clientWidth: 1024, clientHeight: 768 },
+      });
+
+      const result = await controller.getViewportSize(tabId);
+
+      expect(result).toStrictEqual({ width: 1024, height: 768 });
+    });
+
+    it("rounds dimensions to integers", async () => {
+      mockChrome.debugger.sendCommand.mockResolvedValue({
+        visualViewport: { clientWidth: 1280.5, clientHeight: 720.7 },
+      });
+
+      const result = await controller.getViewportSize(tabId);
+
+      expect(result).toStrictEqual({ width: 1281, height: 721 });
+    });
+  });
+
+  describe("captureScreenshot", () => {
+    let controller: CDPController;
+    const tabId = 900;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+    });
+
+    it("captures screenshot and returns base64 with dimensions", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable from attach
+        .mockResolvedValueOnce({ data: "base64imagedata" }) // captureScreenshot
+        .mockResolvedValueOnce({
+          visualViewport: { clientWidth: 1920, clientHeight: 1080 },
+        }); // getLayoutMetrics
+
+      const result = await controller.captureScreenshot(tabId);
+
+      expect(result.base64).toBe("base64imagedata");
+      expect(result.width).toBe(1920);
+      expect(result.height).toBe(1080);
+    });
+
+    it("calls Page.captureScreenshot with png format", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockResolvedValueOnce({ data: "base64" })
+        .mockResolvedValueOnce({
+          visualViewport: { clientWidth: 800, clientHeight: 600 },
+        });
+
+      await controller.captureScreenshot(tabId);
+
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Page.captureScreenshot",
+        { format: "png", captureBeyondViewport: false },
+      );
+    });
+  });
+
+  describe("captureRegion", () => {
+    let controller: CDPController;
+    const tabId = 1000;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockResolvedValueOnce({ data: "regiondata" }); // captureScreenshot
+    });
+
+    it("captures region with clip parameters", async () => {
+      const result = await controller.captureRegion(tabId, 100, 200, 300, 400);
+
+      expect(result.base64).toBe("regiondata");
+      expect(result.width).toBe(300);
+      expect(result.height).toBe(400);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Page.captureScreenshot",
+        { format: "png", clip: { x: 100, y: 200, width: 300, height: 400, scale: 1 } },
+      );
+    });
+  });
 });
