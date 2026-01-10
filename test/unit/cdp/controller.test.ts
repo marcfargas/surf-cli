@@ -706,4 +706,88 @@ describe("CDPController", () => {
       expect(pressCalls[1]?.[2].clickCount).toBe(2);
     });
   });
+
+  describe("pressKey", () => {
+    let controller: CDPController;
+    const tabId = 1800;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("dispatches keyDown and keyUp events for Enter", async () => {
+      await controller.pressKey(tabId, "Enter");
+
+      const calls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchKeyEvent",
+      );
+
+      expect(calls.length).toBe(2);
+
+      const keyDown = calls.find((c) => c[2].type === "keyDown");
+      expect(keyDown?.[2].key).toBe("Enter");
+      expect(keyDown?.[2].code).toBe("Enter");
+
+      const keyUp = calls.find((c) => c[2].type === "keyUp");
+      expect(keyUp?.[2].key).toBe("Enter");
+    });
+
+    it("dispatches events for regular character", async () => {
+      await controller.pressKey(tabId, "a");
+
+      const keyDown = mockChrome.debugger.sendCommand.mock.calls.find(
+        (call) => call[1] === "Input.dispatchKeyEvent" && call[2].type === "keyDown",
+      );
+
+      expect(keyDown?.[2].key).toBe("a");
+      expect(keyDown?.[2].code).toBe("KeyA");
+      expect(keyDown?.[2].text).toBe("a");
+    });
+
+    it("throws error for unknown key", async () => {
+      let error: Error | undefined;
+      try {
+        await controller.pressKey(tabId, "UnknownSpecialKey");
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain("Unknown key");
+    });
+  });
+
+  describe("pressKeyChord", () => {
+    let controller: CDPController;
+    const tabId = 1900;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("parses and applies modifiers for ctrl+a", async () => {
+      await controller.pressKeyChord(tabId, "ctrl+a");
+
+      const keyDown = mockChrome.debugger.sendCommand.mock.calls.find(
+        (call) => call[1] === "Input.dispatchKeyEvent" && call[2].type === "keyDown",
+      );
+
+      expect(keyDown?.[2].key).toBe("a");
+      expect(keyDown?.[2].modifiers).toBe(2); // ctrl = 2
+    });
+
+    it("handles multiple modifiers", async () => {
+      await controller.pressKeyChord(tabId, "ctrl+shift+a");
+
+      const keyDown = mockChrome.debugger.sendCommand.mock.calls.find(
+        (call) => call[1] === "Input.dispatchKeyEvent" && call[2].type === "keyDown",
+      );
+
+      expect(keyDown?.[2].modifiers).toBe(10); // ctrl=2 + shift=8
+    });
+  });
 });
