@@ -1162,4 +1162,51 @@ describe("CDPController", () => {
       expect(enterDown).toBeDefined();
     });
   });
+
+  describe("getResponseBody", () => {
+    let controller: CDPController;
+    const tabId = 3400;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+    });
+
+    it("returns response body", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockResolvedValueOnce({ body: '{"key":"value"}', base64Encoded: false });
+
+      const result = await controller.getResponseBody(tabId, "req-123");
+
+      expect(result.success).toBe(true);
+      expect(result.body).toBe('{"key":"value"}');
+      expect(result.base64Encoded).toBe(false);
+    });
+
+    it("returns error when body not available", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockRejectedValueOnce(new Error("No resource with given identifier"));
+
+      const result = await controller.getResponseBody(tabId, "req-invalid");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("No resource");
+    });
+  });
+
+  describe("getNetworkEntry", () => {
+    let controller: CDPController;
+    const tabId = 3500;
+
+    beforeEach(() => {
+      controller = new CDPController();
+    });
+
+    it("returns null for non-existent entry", () => {
+      const entry = controller.getNetworkEntry(tabId, "nonexistent");
+      expect(entry).toBeNull();
+    });
+  });
 });
