@@ -1209,4 +1209,44 @@ describe("CDPController", () => {
       expect(entry).toBeNull();
     });
   });
+
+  describe("evaluateInFrame", () => {
+    let controller: CDPController;
+    const tabId = 3600;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+    });
+
+    it("evaluates expression in isolated world", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockResolvedValueOnce({ executionContextId: 123 }) // createIsolatedWorld
+        .mockResolvedValueOnce({ result: { value: '"test result"' } }); // Runtime.evaluate
+
+      const result = await controller.evaluateInFrame(tabId, "frame-1", "return 'test'");
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Page.createIsolatedWorld",
+        { frameId: "frame-1", worldName: "surf-isolated" },
+      );
+    });
+
+    it("returns error on evaluation failure", async () => {
+      mockChrome.debugger.sendCommand
+        .mockResolvedValueOnce({}) // Page.enable
+        .mockResolvedValueOnce({ executionContextId: 123 })
+        .mockResolvedValueOnce({
+          exceptionDetails: { text: "SyntaxError" },
+        });
+
+      const result = await controller.evaluateInFrame(tabId, "frame-1", "invalid{{{");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("SyntaxError");
+    });
+  });
 });
