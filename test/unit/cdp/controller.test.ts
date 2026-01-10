@@ -790,4 +790,36 @@ describe("CDPController", () => {
       expect(keyDown?.[2].modifiers).toBe(10); // ctrl=2 + shift=8
     });
   });
+
+  describe("drag", () => {
+    let controller: CDPController;
+    const tabId = 2000;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("performs drag from start to end coordinates", async () => {
+      await controller.drag(tabId, 100, 100, 200, 200);
+
+      const calls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchMouseEvent",
+      );
+
+      // Should have: initial move, press, move to end, release
+      expect(calls.length).toBeGreaterThanOrEqual(4);
+
+      // Check press at start
+      const pressCall = calls.find((c) => c[2].type === "mousePressed");
+      expect(pressCall?.[2].x).toBe(100);
+      expect(pressCall?.[2].y).toBe(100);
+
+      // Check release at end
+      const releaseCall = calls.find((c) => c[2].type === "mouseReleased");
+      expect(releaseCall?.[2].x).toBe(200);
+      expect(releaseCall?.[2].y).toBe(200);
+    });
+  });
 });
