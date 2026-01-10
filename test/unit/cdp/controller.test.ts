@@ -615,4 +615,95 @@ describe("CDPController", () => {
       });
     });
   });
+
+  describe("click", () => {
+    let controller: CDPController;
+    const tabId = 1500;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("dispatches mouse move, press, and release events", async () => {
+      await controller.click(tabId, 100, 200);
+
+      const calls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchMouseEvent",
+      );
+
+      // Should have: mouseMoved, mousePressed, mouseReleased
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+
+      // Check mouseMoved
+      const moveCall = calls.find((c) => c[2].type === "mouseMoved");
+      expect(moveCall).toBeDefined();
+      expect(moveCall?.[2].x).toBe(100);
+      expect(moveCall?.[2].y).toBe(200);
+
+      // Check mousePressed
+      const pressCall = calls.find((c) => c[2].type === "mousePressed");
+      expect(pressCall).toBeDefined();
+      expect(pressCall?.[2].button).toBe("left");
+
+      // Check mouseReleased
+      const releaseCall = calls.find((c) => c[2].type === "mouseReleased");
+      expect(releaseCall).toBeDefined();
+    });
+
+    it("uses specified button", async () => {
+      await controller.click(tabId, 50, 50, "right");
+
+      const pressCall = mockChrome.debugger.sendCommand.mock.calls.find(
+        (call) => call[1] === "Input.dispatchMouseEvent" && call[2].type === "mousePressed",
+      );
+
+      expect(pressCall?.[2].button).toBe("right");
+    });
+  });
+
+  describe("rightClick", () => {
+    let controller: CDPController;
+    const tabId = 1600;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("clicks with right button", async () => {
+      await controller.rightClick(tabId, 100, 200);
+
+      const pressCall = mockChrome.debugger.sendCommand.mock.calls.find(
+        (call) => call[1] === "Input.dispatchMouseEvent" && call[2].type === "mousePressed",
+      );
+
+      expect(pressCall?.[2].button).toBe("right");
+    });
+  });
+
+  describe("doubleClick", () => {
+    let controller: CDPController;
+    const tabId = 1700;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("clicks twice with clickCount 2", async () => {
+      await controller.doubleClick(tabId, 100, 200);
+
+      const pressCalls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchMouseEvent" && call[2].type === "mousePressed",
+      );
+
+      // Should have 2 press events for double click
+      expect(pressCalls.length).toBe(2);
+      expect(pressCalls[1]?.[2].clickCount).toBe(2);
+    });
+  });
 });
