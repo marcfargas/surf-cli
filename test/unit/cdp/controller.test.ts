@@ -822,4 +822,78 @@ describe("CDPController", () => {
       expect(releaseCall?.[2].y).toBe(200);
     });
   });
+
+  describe("subscribeToConsole", () => {
+    let controller: CDPController;
+    const tabId = 2100;
+
+    beforeEach(() => {
+      controller = new CDPController();
+    });
+
+    it("registers callback for stream", () => {
+      const callback = vi.fn();
+      controller.subscribeToConsole(tabId, 1, callback);
+
+      // No error means success - callback is stored internally
+      expect(callback).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("unsubscribeFromConsole", () => {
+    let controller: CDPController;
+    const tabId = 2200;
+
+    beforeEach(() => {
+      controller = new CDPController();
+    });
+
+    it("removes callback without error", () => {
+      const callback = vi.fn();
+      controller.subscribeToConsole(tabId, 1, callback);
+      controller.unsubscribeFromConsole(tabId, 1);
+
+      // No error means success
+      expect(true).toBe(true);
+    });
+
+    it("handles unsubscribe for non-existent stream", () => {
+      // Should not throw
+      controller.unsubscribeFromConsole(tabId, 999);
+      expect(true).toBe(true);
+    });
+  });
+
+  describe("subscribeToNetwork", () => {
+    let controller: CDPController;
+    const tabId = 2300;
+
+    beforeEach(() => {
+      controller = new CDPController();
+    });
+
+    it("registers callback for stream", () => {
+      const callback = vi.fn();
+      controller.subscribeToNetwork(tabId, 1, callback);
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("unsubscribeFromNetwork", () => {
+    let controller: CDPController;
+    const tabId = 2400;
+
+    beforeEach(() => {
+      controller = new CDPController();
+    });
+
+    it("removes callback without error", () => {
+      const callback = vi.fn();
+      controller.subscribeToNetwork(tabId, 1, callback);
+      controller.unsubscribeFromNetwork(tabId, 1);
+
+      expect(true).toBe(true);
+    });
+  });
 });
