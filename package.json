@@ -1,11 +1,38 @@
 {
   "name": "surf-cli",
   "version": "2.0.0",
-  "private": true,
+  "description": "CLI for AI agents to control Chrome. Zero config, agent-agnostic, battle-tested.",
+  "keywords": [
+    "chrome",
+    "browser",
+    "automation",
+    "ai",
+    "agent",
+    "cli",
+    "cdp",
+    "devtools"
+  ],
+  "author": "Nico Bailon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicobailon/surf-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nicobailon/surf-cli/issues"
+  },
+  "homepage": "https://github.com/nicobailon/surf-cli#readme",
   "type": "module",
   "bin": {
-    "surf": "./native/cli.cjs"
+    "surf": "native/cli.cjs"
   },
+  "files": [
+    "native/",
+    "scripts/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "vite build",
