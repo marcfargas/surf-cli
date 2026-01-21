@@ -1,6 +1,14 @@
+<p>
+  <img src="surf-banner.png" alt="surf" width="1100">
+</p>
+
 # Surf
 
-The CLI for AI agents to control Chrome. Zero config, agent-agnostic, battle-tested.
+**The CLI for AI agents to control Chrome. Zero config, agent-agnostic, battle-tested.**
+
+[![npm version](https://img.shields.io/npm/v/surf-cli?style=for-the-badge)](https://www.npmjs.com/package/surf-cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue?style=for-the-badge)]()
 
 ```bash
 surf go "https://example.com"

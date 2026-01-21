@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.3.1] - 2026-01-20
+
+### Changed
+- Added tropical beach banner image to README with robot surfing, Chrome logos, and palm trees.
+- Added npm version, license, and platform badges to README.
+
 ## [2.3.0] - 2026-01-20
 
 ### Added
