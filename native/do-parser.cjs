@@ -206,17 +206,23 @@ function parseCommandLine(line) {
 }
 
 /**
- * Parse a multi-line workflow string into step array
- * @param {string} input - Multi-line workflow string
+ * Parse a workflow string into step array
+ * Supports pipe-separated (inline) or newline-separated (file) commands
+ * @param {string} input - Workflow string
  * @returns {Array<{ cmd: string, args: object }>}
  */
 function parseDoCommands(input) {
-  // Replace literal \n (backslash + n) with actual newlines
-  // This handles bash single-quoted strings like 'go "url"\nclick e5'
-  const normalized = input.replace(/\\n/g, '\n');
+  // Determine separator: use pipe if present, otherwise newlines
+  // Pipe is preferred for inline: 'go "url" | click e5 | screenshot'
+  // Newlines for files or heredocs
+  const hasPipe = input.includes('|');
+  const separator = hasPipe ? '|' : '\n';
+  
+  // Also handle literal \n for backwards compatibility
+  const normalized = hasPipe ? input : input.replace(/\\n/g, '\n');
   
   return normalized
-    .split('\n')
+    .split(separator)
     .map(line => line.trim())
     .filter(line => line && !line.startsWith('#'))
     .map(line => parseCommandLine(line))

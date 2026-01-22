@@ -378,18 +378,17 @@ Auto-cleanup: 24 hours TTL, 200MB max.
 Execute multi-step browser automation as a single command:
 
 ```bash
-# Inline workflow (newline-separated commands)
-surf do 'go "https://example.com/login"
-type "user@example.com" --selector "input[name=email]"
-type "password123" --selector "input[name=password]"
-click --selector "button[type=submit]"
-screenshot --output /tmp/after-login.png'
+# Inline workflow (pipe-separated)
+surf do 'go "https://example.com" | click e5 | screenshot'
 
-# From JSON file (same format as --script)
-surf do --file login-workflow.json
+# Multi-step login flow
+surf do 'go "https://example.com/login" | type "user@example.com" --selector "#email" | type "pass" --selector "#password" | click --selector "button[type=submit]"'
+
+# From JSON file
+surf do --file workflow.json
 
 # Validate without executing
-surf do 'go "url"\nclick e5\nscreenshot' --dry-run
+surf do 'go "url" | click e5 | screenshot' --dry-run
 ```
 
 **Why workflows?** Instead of 6-8 separate CLI calls with LLM orchestration between each step, a workflow executes deterministically with smart auto-waits. Faster, cheaper, and more reliable.

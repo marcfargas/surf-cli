@@ -12,6 +12,17 @@ describe("parseDoCommands", () => {
     expect(steps[0].args).toEqual({});
   });
 
+  it("parses pipe-separated commands", () => {
+    const input = 'go "https://example.com" | click e5 | screenshot';
+    const steps = parser.parseDoCommands(input);
+    expect(steps).toHaveLength(3);
+    expect(steps[0].cmd).toBe("navigate");
+    expect(steps[0].args.url).toBe("https://example.com");
+    expect(steps[1].cmd).toBe("click");
+    expect(steps[1].args.ref).toBe("e5");
+    expect(steps[2].cmd).toBe("screenshot");
+  });
+
   it("parses newline-separated commands", () => {
     const input = 'go "https://example.com"\nclick e5';
     const steps = parser.parseDoCommands(input);

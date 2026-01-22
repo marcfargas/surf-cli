@@ -1,10 +1,17 @@
 # Changelog
 
+## [2.4.1] - 2026-01-22
+
+### Changed
+- **Workflow syntax** - Pipe separator `|` is now the primary way to chain commands inline:
+  `surf do 'go "https://example.com" | click e5 | screenshot'`
+  Newlines still supported for file-based workflows and heredocs.
+
 ## [2.4.0] - 2026-01-22
 
 ### Added
 - **Workflow execution** - New `surf do` command to execute multi-step browser workflows as a single operation. Reduces token overhead and improves reliability for common automation sequences.
-  - Inline workflows: `surf do 'go "https://example.com"\nclick e5\nscreenshot'`
+  - Inline workflows: `surf do 'go "url" | click e5 | screenshot'`
   - File-based workflows: `surf do --file workflow.json`
   - Dry run validation: `surf do '...' --dry-run`
   - Smart auto-waits after navigation, clicks, and form submissions

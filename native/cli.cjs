@@ -817,9 +817,9 @@ const TOOLS = {
           "dry-run": "Parse and validate without executing"
         },
         examples: [
-          { cmd: 'do \'go "https://example.com"\\nclick e5\\nscreenshot\'', desc: "Inline workflow" },
+          { cmd: 'do \'go "https://example.com" | click e5 | screenshot\'', desc: "Inline workflow" },
           { cmd: 'do -f login.json', desc: "From JSON file" },
-          { cmd: 'do \'go "url"\\nclick e5\' --dry-run', desc: "Validate without running" },
+          { cmd: 'do \'go "url" | click e5\' --dry-run', desc: "Validate without running" },
         ]
       },
     }
