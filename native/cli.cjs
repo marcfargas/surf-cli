@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const net = require("net");
 const fs = require("fs");
+const path = require("path");
+const os = require("os");
 const { execSync } = require("child_process");
 const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
 const networkFormatters = require("./formatters/network.cjs");
@@ -9,6 +11,249 @@ const { parseDoCommands } = require("./do-parser.cjs");
 const { executeDoSteps } = require("./do-executor.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
+
+// ============================================================================
+// Workflow Resolution and Management
+// ============================================================================
+
+/**
+ * Get workflow search directories
+ * @returns {Array<{path: string, scope: string}>}
+ */
+function getWorkflowDirs() {
+  return [
+    { path: path.join(process.cwd(), '.surf', 'workflows'), scope: 'project' },
+    { path: path.join(os.homedir(), '.surf', 'workflows'), scope: 'user' },
+  ];
+}
+
+/**
+ * Resolve a workflow by name or path
+ * @param {string} nameOrPath - Workflow name or file path
+ * @returns {{ type: 'inline'|'file'|'not_found', content?: string, path?: string, name?: string }}
+ */
+function resolveWorkflow(nameOrPath) {
+  // Check if it's an inline workflow (contains pipe)
+  if (nameOrPath.includes('|')) {
+    return { type: 'inline', content: nameOrPath };
+  }
+  
+  // Check if it's a direct file path (with extension or path separator)
+  if (nameOrPath.includes('/') || nameOrPath.includes('\\') || nameOrPath.endsWith('.json')) {
+    if (fs.existsSync(nameOrPath)) {
+      return { type: 'file', path: nameOrPath };
+    }
+    return { type: 'not_found', name: nameOrPath };
+  }
+  
+  // Look up by name in workflow directories
+  const searchDirs = getWorkflowDirs();
+  
+  for (const { path: dir } of searchDirs) {
+    const filePath = path.join(dir, `${nameOrPath}.json`);
+    if (fs.existsSync(filePath)) {
+      return { type: 'file', path: filePath };
+    }
+  }
+  
+  return { type: 'not_found', name: nameOrPath };
+}
+
+/**
+ * List all available workflows
+ * @returns {Array<{name: string, description: string, scope: string, path: string, args?: object}>}
+ */
+function listWorkflows() {
+  const workflows = [];
+  const searchDirs = getWorkflowDirs();
+  
+  for (const { path: dir, scope } of searchDirs) {
+    if (fs.existsSync(dir)) {
+      try {
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+          const filePath = path.join(dir, file);
+          try {
+            const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            workflows.push({
+              name: content.name || file.replace('.json', ''),
+              description: content.description || '',
+              scope,
+              path: filePath,
+              args: content.args,
+              stepCount: content.steps?.length || 0,
+            });
+          } catch {
+            // Skip invalid JSON files
+          }
+        }
+      } catch {
+        // Skip inaccessible directories
+      }
+    }
+  }
+  
+  return workflows;
+}
+
+/**
+ * Get detailed info about a workflow
+ * @param {string} name - Workflow name
+ * @returns {{ error?: string, name?: string, description?: string, args?: object, steps?: Array, path?: string }}
+ */
+function getWorkflowInfo(name) {
+  const resolved = resolveWorkflow(name);
+  
+  if (resolved.type === 'not_found') {
+    return { error: `Workflow not found: ${name}` };
+  }
+  
+  if (resolved.type === 'inline') {
+    return { error: 'Cannot get info for inline workflows' };
+  }
+  
+  try {
+    const content = JSON.parse(fs.readFileSync(resolved.path, 'utf8'));
+    return {
+      name: content.name || name,
+      description: content.description || '',
+      args: content.args || {},
+      steps: content.steps || [],
+      path: resolved.path,
+    };
+  } catch (e) {
+    return { error: `Failed to parse workflow: ${e.message}` };
+  }
+}
+
+/**
+ * Validate workflow args against schema
+ * @param {object} workflow - Workflow with args schema
+ * @param {object} providedArgs - User-provided args
+ * @returns {string[]} - Array of error messages
+ */
+function validateWorkflowArgs(workflow, providedArgs) {
+  const errors = [];
+  if (workflow.args) {
+    for (const [name, spec] of Object.entries(workflow.args)) {
+      if (spec.required && providedArgs[name] === undefined) {
+        errors.push(`Missing required argument: --${name}`);
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Apply default values to workflow args
+ * @param {object} workflow - Workflow with args schema
+ * @param {object} providedArgs - User-provided args
+ * @returns {object} - Args with defaults applied
+ */
+function applyArgDefaults(workflow, providedArgs) {
+  const vars = { ...providedArgs };
+  if (workflow.args) {
+    for (const [name, spec] of Object.entries(workflow.args)) {
+      if (vars[name] === undefined && spec.default !== undefined) {
+        vars[name] = spec.default;
+      }
+    }
+  }
+  return vars;
+}
+
+/**
+ * Validate a workflow JSON file
+ * @param {string} filePath - Path to workflow file
+ * @returns {{ valid: boolean, error?: string, workflow?: object }}
+ */
+function validateWorkflowFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { valid: false, error: `File not found: ${filePath}` };
+  }
+  
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const workflow = JSON.parse(content);
+    
+    // Basic structure validation
+    if (!workflow.steps || !Array.isArray(workflow.steps)) {
+      return { valid: false, error: "Workflow must have a 'steps' array" };
+    }
+    
+    if (workflow.steps.length === 0) {
+      return { valid: false, error: "Workflow has no steps" };
+    }
+    
+    // Validate each step
+    for (let i = 0; i < workflow.steps.length; i++) {
+      const step = workflow.steps[i];
+      
+      // Check for loops
+      if (step.repeat !== undefined || step.each !== undefined) {
+        if (!step.steps || !Array.isArray(step.steps)) {
+          return { valid: false, error: `Step ${i + 1}: loop must have a 'steps' array` };
+        }
+        continue;
+      }
+      
+      // Regular step must have tool/cmd
+      if (!step.tool && !step.cmd) {
+        return { valid: false, error: `Step ${i + 1}: must have 'tool' field` };
+      }
+    }
+    
+    // Validate args schema if present
+    if (workflow.args && typeof workflow.args !== 'object') {
+      return { valid: false, error: "'args' must be an object" };
+    }
+    
+    return { valid: true, workflow };
+  } catch (e) {
+    return { valid: false, error: `Invalid JSON: ${e.message}` };
+  }
+}
+
+/**
+ * Format a step for display
+ * @param {object} step - Workflow step
+ * @param {number} indent - Indentation level
+ * @returns {string}
+ */
+function formatStep(step, indent = 0) {
+  const pad = '  '.repeat(indent);
+  
+  if (step.repeat !== undefined) {
+    const lines = [`${pad}repeat ${step.repeat} times:`];
+    for (const s of step.steps || []) {
+      lines.push(formatStep(s, indent + 1));
+    }
+    if (step.until) {
+      lines.push(`${pad}  until: ${step.until.tool || step.until.cmd}`);
+    }
+    return lines.join('\n');
+  }
+  
+  if (step.each !== undefined) {
+    const lines = [`${pad}each ${step.each} as ${step.as || 'item'}:`];
+    for (const s of step.steps || []) {
+      lines.push(formatStep(s, indent + 1));
+    }
+    return lines.join('\n');
+  }
+  
+  const tool = step.tool || step.cmd;
+  const args = step.args || {};
+  const argStr = Object.entries(args)
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(' ');
+  
+  let line = `${pad}${tool}`;
+  if (argStr) line += ` ${argStr}`;
+  if (step.as) line += ` → ${step.as}`;
+  
+  return line;
+}
 
 // Cross-platform image resize (macOS: sips, Linux: ImageMagick)
 function resizeImage(filePath, maxSize) {
@@ -804,7 +1049,7 @@ const TOOLS = {
     }
   },
   workflow: {
-    desc: "Workflow execution",
+    desc: "Workflow execution and management",
     commands: {
       "do": {
         desc: "Execute multiple commands as a single workflow",
@@ -819,7 +1064,32 @@ const TOOLS = {
         examples: [
           { cmd: 'do \'go "https://example.com" | click e5 | screenshot\'', desc: "Inline workflow" },
           { cmd: 'do -f login.json', desc: "From JSON file" },
+          { cmd: 'do github-login --email "x" --password "y"', desc: "Named workflow with args" },
           { cmd: 'do \'go "url" | click e5\' --dry-run', desc: "Validate without running" },
+        ]
+      },
+      "workflow.list": {
+        desc: "List available workflows",
+        args: [],
+        opts: {},
+        examples: [
+          { cmd: 'workflow.list', desc: "Show all workflows" },
+        ]
+      },
+      "workflow.info": {
+        desc: "Show workflow details and arguments",
+        args: ["name"],
+        opts: {},
+        examples: [
+          { cmd: 'workflow.info github-login', desc: "Show workflow details" },
+        ]
+      },
+      "workflow.validate": {
+        desc: "Validate workflow JSON file",
+        args: ["file"],
+        opts: {},
+        examples: [
+          { cmd: 'workflow.validate ./my-flow.json', desc: "Check JSON validity" },
         ]
       },
     }
@@ -1762,6 +2032,12 @@ if (args[0] === "do") {
   let tabId = undefined;
   let windowId = undefined;
   
+  // Reserved flags that aren't workflow args
+  const reservedFlags = ['file', 'f', 'dry-run', 'on-error', 'no-auto-wait', 'step-delay', 'json', 'tab-id', 'window-id'];
+  
+  // Workflow-specific args (collected for variable substitution)
+  const workflowArgs = {};
+  
   // Parse do-specific arguments
   for (let i = 0; i < doArgs.length; i++) {
     const arg = doArgs[i];
@@ -1787,61 +2063,165 @@ if (args[0] === "do") {
     } else if (arg === "--window-id") {
       windowId = parseInt(doArgs[i + 1], 10);
       i++;
+    } else if (arg.startsWith("--")) {
+      // Workflow-specific arg (e.g., --email, --password)
+      const key = arg.slice(2);
+      if (!reservedFlags.includes(key)) {
+        const next = doArgs[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          // Type coercion
+          let val = next;
+          if (val === "true") val = true;
+          else if (val === "false") val = false;
+          else if (/^-?\d+$/.test(val)) val = parseInt(val, 10);
+          else if (/^-?\d+\.\d+$/.test(val)) val = parseFloat(val);
+          workflowArgs[key] = val;
+          i++;
+        } else {
+          workflowArgs[key] = true;
+        }
+      }
     } else if (!arg.startsWith("-")) {
       commandsInput = arg;
     }
   }
   
   if (!commandsInput && !fileInput) {
-    console.error("Error: commands string or --file required");
-    console.error('Usage: surf do \'go "url"\\nclick e5\'');
+    console.error("Error: commands string, workflow name, or --file required");
+    console.error('Usage: surf do \'go "url" | click e5\'');
     console.error("       surf do --file workflow.json");
+    console.error("       surf do my-workflow --arg1 value1 --arg2 value2");
     process.exit(1);
   }
   
   let steps;
+  let workflow = null; // Full workflow object (for arg validation)
+  let workflowName = null;
+  
   try {
     if (fileInput) {
+      // Explicit file path via --file
       if (!fs.existsSync(fileInput)) {
         console.error(`Error: File not found: ${fileInput}`);
         process.exit(1);
       }
       const content = fs.readFileSync(fileInput, "utf8");
-      // JSON file format (same as --script)
-      const script = JSON.parse(content);
-      if (!script.steps || !Array.isArray(script.steps)) {
-        throw new Error("JSON must have a 'steps' array");
-      }
-      // Convert --script format { tool, args } to do format { cmd, args }
-      steps = script.steps.map(s => ({ cmd: s.tool, args: s.args || {} }));
+      workflow = JSON.parse(content);
+      workflowName = workflow.name || fileInput;
     } else {
-      // Inline string parsing
-      steps = parseDoCommands(commandsInput);
+      // Resolve: inline | file path | named workflow
+      const resolved = resolveWorkflow(commandsInput);
+      
+      if (resolved.type === 'inline') {
+        // Inline pipe syntax
+        steps = parseDoCommands(resolved.content);
+      } else if (resolved.type === 'file') {
+        // Found workflow file
+        const content = fs.readFileSync(resolved.path, "utf8");
+        workflow = JSON.parse(content);
+        workflowName = workflow.name || commandsInput;
+      } else {
+        // Not found - try parsing as inline (might be a single command)
+        steps = parseDoCommands(commandsInput);
+        if (steps.length === 0) {
+          console.error(`Error: Workflow not found: ${commandsInput}`);
+          console.error(`Searched in:`);
+          for (const { path: dir } of getWorkflowDirs()) {
+            console.error(`  ${dir}`);
+          }
+          console.error(`\nRun 'surf workflow.list' to see available workflows.`);
+          process.exit(1);
+        }
+      }
+    }
+    
+    // Process workflow file if loaded
+    if (workflow) {
+      if (!workflow.steps || !Array.isArray(workflow.steps)) {
+        throw new Error("Workflow must have a 'steps' array");
+      }
+      
+      // Validate required args
+      const argErrors = validateWorkflowArgs(workflow, workflowArgs);
+      if (argErrors.length > 0) {
+        console.error("Error: Missing required arguments:");
+        argErrors.forEach(e => console.error(`  ${e}`));
+        if (workflow.args) {
+          console.error(`\nWorkflow arguments:`);
+          for (const [name, spec] of Object.entries(workflow.args)) {
+            const req = spec.required ? ' (required)' : '';
+            const def = spec.default !== undefined ? ` [default: ${spec.default}]` : '';
+            const desc = spec.desc || spec.description || '';
+            console.error(`  --${name}${req}${def}${desc ? ` - ${desc}` : ''}`);
+          }
+        }
+        console.error(`\nRun 'surf workflow.info ${workflowName}' for details.`);
+        process.exit(1);
+      }
+      
+      // Convert steps: support both { tool, args } and { cmd, args } formats
+      // Also preserve loop steps as-is
+      steps = workflow.steps.map(s => {
+        if (s.repeat !== undefined || s.each !== undefined) {
+          // Loop step - convert nested steps recursively
+          const convertSteps = (stepsArr) => stepsArr.map(ns => {
+            if (ns.repeat !== undefined || ns.each !== undefined) {
+              // Recursively convert nested loop steps and until condition
+              return { 
+                ...ns, 
+                steps: convertSteps(ns.steps || []),
+                until: ns.until ? { cmd: ns.until.tool || ns.until.cmd, args: ns.until.args || {} } : undefined
+              };
+            }
+            return { cmd: ns.tool || ns.cmd, args: ns.args || {}, as: ns.as };
+          });
+          return { 
+            ...s, 
+            steps: convertSteps(s.steps || []),
+            until: s.until ? { cmd: s.until.tool || s.until.cmd, args: s.until.args || {} } : undefined
+          };
+        }
+        return { cmd: s.tool || s.cmd, args: s.args || {}, as: s.as };
+      });
     }
   } catch (e) {
     console.error(`Error: Failed to parse workflow: ${e.message}`);
     process.exit(1);
   }
   
-  if (steps.length === 0) {
+  if (!steps || steps.length === 0) {
     console.error("Error: No commands found in workflow");
     process.exit(1);
   }
   
+  // Apply arg defaults
+  const vars = workflow ? applyArgDefaults(workflow, workflowArgs) : workflowArgs;
+  
   // Validate with --dry-run
   if (dryRun) {
-    console.log(`Would execute ${steps.length} steps:`);
+    if (workflowName) {
+      console.log(`Workflow: ${workflowName}`);
+      if (workflow?.description) console.log(`Description: ${workflow.description}`);
+    }
+    console.log(`\nWould execute ${steps.length} steps:`);
     steps.forEach((s, i) => {
-      const argStr = Object.entries(s.args || {})
-        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-        .join(" ");
-      console.log(`  ${i + 1}. ${s.cmd} ${argStr}`);
+      console.log(`  ${i + 1}. ${formatStep(s)}`);
     });
+    if (Object.keys(vars).length > 0) {
+      console.log(`\nVariables:`);
+      for (const [k, v] of Object.entries(vars)) {
+        console.log(`  ${k} = ${JSON.stringify(v)}`);
+      }
+    }
     process.exit(0);
   }
   
   if (!wantJson) {
-    console.log(`Running workflow (${steps.length} steps)...\n`);
+    if (workflowName) {
+      console.log(`Running workflow: ${workflowName} (${steps.length} steps)...\n`);
+    } else {
+      console.log(`Running workflow (${steps.length} steps)...\n`);
+    }
   }
   
   const runWorkflow = async () => {
@@ -1850,6 +2230,7 @@ if (args[0] === "do") {
       autoWait: !noAutoWait,
       stepDelay,
       quiet: wantJson,
+      vars,
       context: {
         tabId,
         windowId,
@@ -1878,6 +2259,127 @@ if (args[0] === "do") {
   
   runWorkflow();
   return;
+}
+
+// Handle workflow management commands
+if (args[0] === "workflow.list") {
+  const workflows = listWorkflows();
+  
+  if (workflows.length === 0) {
+    console.log("No workflows found.");
+    console.log(`\nWorkflow directories:`);
+    for (const { path: dir, scope } of getWorkflowDirs()) {
+      console.log(`  ${scope}: ${dir}`);
+    }
+    console.log(`\nCreate a workflow JSON file in one of these directories.`);
+    process.exit(0);
+  }
+  
+  // Group by scope
+  const byScope = { project: [], user: [] };
+  for (const w of workflows) {
+    byScope[w.scope].push(w);
+  }
+  
+  if (byScope.user.length > 0) {
+    console.log(`User Workflows (~/.surf/workflows/):`);
+    for (const w of byScope.user) {
+      const desc = w.description ? ` - ${w.description}` : '';
+      console.log(`  ${w.name.padEnd(20)} ${desc}`);
+    }
+    console.log("");
+  }
+  
+  if (byScope.project.length > 0) {
+    console.log(`Project Workflows (./.surf/workflows/):`);
+    for (const w of byScope.project) {
+      const desc = w.description ? ` - ${w.description}` : '';
+      console.log(`  ${w.name.padEnd(20)} ${desc}`);
+    }
+    console.log("");
+  }
+  
+  console.log(`Run 'surf workflow.info <name>' for details.`);
+  process.exit(0);
+}
+
+if (args[0] === "workflow.info") {
+  const name = args[1];
+  if (!name) {
+    console.error("Error: workflow name required");
+    console.error("Usage: surf workflow.info <name>");
+    process.exit(1);
+  }
+  
+  const info = getWorkflowInfo(name);
+  if (info.error) {
+    console.error(`Error: ${info.error}`);
+    process.exit(1);
+  }
+  
+  console.log(`${info.name}${info.description ? ` - ${info.description}` : ''}`);
+  console.log("");
+  
+  // Arguments
+  if (info.args && Object.keys(info.args).length > 0) {
+    console.log("Arguments:");
+    for (const [argName, spec] of Object.entries(info.args)) {
+      const req = spec.required ? ' (required)' : '';
+      const def = spec.default !== undefined ? ` [default: ${spec.default}]` : '';
+      const desc = spec.desc || spec.description || '';
+      console.log(`  --${argName}${req}${def}`);
+      if (desc) console.log(`      ${desc}`);
+    }
+    console.log("");
+  }
+  
+  // Steps
+  console.log(`Steps (${info.steps.length}):`);
+  info.steps.forEach((step, i) => {
+    console.log(`  ${i + 1}. ${formatStep(step)}`);
+  });
+  console.log("");
+  
+  // Location
+  console.log(`Location: ${info.path}`);
+  console.log("");
+  
+  // Example run command
+  const argExample = Object.entries(info.args || {})
+    .filter(([_, spec]) => spec.required)
+    .map(([name, _]) => `--${name} "..."`)
+    .join(' ');
+  console.log(`Run:`);
+  console.log(`  surf do ${name}${argExample ? ' ' + argExample : ''}`);
+  
+  process.exit(0);
+}
+
+if (args[0] === "workflow.validate") {
+  const filePath = args[1];
+  if (!filePath) {
+    console.error("Error: file path required");
+    console.error("Usage: surf workflow.validate <file>");
+    process.exit(1);
+  }
+  
+  const result = validateWorkflowFile(filePath);
+  
+  if (result.valid) {
+    console.log(`✓ Valid workflow: ${filePath}`);
+    console.log(`  Name: ${result.workflow.name || '(unnamed)'}`);
+    console.log(`  Steps: ${result.workflow.steps.length}`);
+    if (result.workflow.args) {
+      const argCount = Object.keys(result.workflow.args).length;
+      const reqCount = Object.values(result.workflow.args).filter(a => a.required).length;
+      console.log(`  Args: ${argCount} (${reqCount} required)`);
+    }
+    process.exit(0);
+  } else {
+    console.error(`✗ Invalid workflow: ${filePath}`);
+    console.error(`  Error: ${result.error}`);
+    process.exit(1);
+  }
 }
 
 const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full", "soft-fail", "has-body", "exclude-static", "v", "vv", "request", "by-tab", "har", "jsonl", "no-save", "no-auto-wait"];

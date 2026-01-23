@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.5.0] - 2026-01-23
+
+### Added
+- **Named workflows** - Save workflows as JSON files in `~/.surf/workflows/` (user) or `./.surf/workflows/` (project) and run by name: `surf do my-workflow --arg1 value`
+- **Workflow arguments** - Define typed arguments with `required` and `default` values. Variable substitution via `%{argname}` syntax in step args.
+- **Step outputs** - Capture step results with `as` field for use in later steps: `{ "tool": "js", "args": {...}, "as": "result" }`
+- **Loops** - `repeat` for fixed iterations, `each` for array iteration, with optional `until` exit condition:
+  ```json
+  { "repeat": 5, "steps": [...] }
+  { "each": "%{items}", "as": "item", "steps": [...] }
+  { "repeat": 20, "until": { "tool": "js", "args": {...} }, "steps": [...] }
+  ```
+- **Workflow discovery commands**:
+  - `surf workflow.list` - List available workflows
+  - `surf workflow.info <name>` - Show workflow details, arguments, and steps
+  - `surf workflow.validate <file>` - Validate workflow JSON structure
+- **Workflow metadata** - `name`, `description`, and `args` schema in workflow files for documentation and validation
+
+### Changed
+- **Dry-run output improved** - Shows workflow name, description, formatted steps with loop structure, and resolved variables
+
 ## [2.4.2] - 2026-01-23
 
 ### Fixed
