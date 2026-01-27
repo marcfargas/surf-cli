@@ -72,10 +72,11 @@ surf tab.list
 ```bash
 surf install <extension-id>                    # Chrome (default)
 surf install <extension-id> --browser brave    # Brave
+surf install <extension-id> --browser helium   # Helium
 surf install <extension-id> --browser all      # All supported browsers
 ```
 
-Supported: `chrome`, `chromium`, `brave`, `edge`, `arc`
+Supported: `chrome`, `chromium`, `brave`, `edge`, `arc`, `helium`
 
 ### Uninstall
 
