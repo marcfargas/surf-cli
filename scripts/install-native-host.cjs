@@ -58,6 +58,9 @@ const NODE_PATHS = {
 };
 
 function findNode() {
+  if (process.env.SURF_NODE_PATH && fs.existsSync(process.env.SURF_NODE_PATH)) {
+    return process.env.SURF_NODE_PATH;
+  }
   const platform = process.platform;
   const paths = NODE_PATHS[platform] || [];
   for (const p of paths) {
@@ -95,6 +98,9 @@ function getWrapperDir() {
 }
 
 function getHostPath() {
+  if (process.env.SURF_HOST_PATH && fs.existsSync(process.env.SURF_HOST_PATH)) {
+    return process.env.SURF_HOST_PATH;
+  }
   const npmRoot = findNpmGlobalRoot();
   if (npmRoot) {
     const globalPath = path.join(npmRoot, "surf-cli/native/host.cjs");

@@ -1752,8 +1752,7 @@ if (args[0] === "server") {
 }
 
 if (args[0] === "extension-path" || args[0] === "path") {
-  const path = require("path");
-  const distPath = path.resolve(__dirname, "../dist");
+  const distPath = process.env.SURF_EXTENSION_PATH || path.resolve(__dirname, "../dist");
   console.log(distPath);
   process.exit(0);
 }
