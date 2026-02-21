@@ -78,6 +78,15 @@ surf install <extension-id> --browser all      # All supported browsers
 
 Supported: `chrome`, `chromium`, `brave`, `edge`, `arc`, `helium`
 
+**Package Manager Installs (Nix, Homebrew, etc.)**
+If surf is installed via a package manager that stores binaries in non-standard locations, set these environment variables before running `surf install`:
+```bash
+export SURF_NODE_PATH=/path/to/node
+export SURF_HOST_PATH=/path/to/native/host.cjs
+export SURF_EXTENSION_PATH=/path/to/extension/dist
+```
+See [Environment Variables](#environment-variables) for details.
+
 ### Uninstall
 
 ```bash
@@ -510,6 +519,26 @@ surf workflow.validate ./my-workflow.json
 --no-screenshot    # Skip auto-screenshot after actions
 --full             # Full resolution screenshots (skip resize)
 --network-path <path>  # Custom path for network logs (default: /tmp/surf, or SURF_NETWORK_PATH env)
+```
+
+## Environment Variables
+
+```bash
+SURF_NETWORK_PATH         # Path for network capture logs (default: /tmp/surf)
+SURF_NODE_PATH            # Path to node binary (for native host wrapper)
+SURF_HOST_PATH            # Path to native/host.cjs (for native host wrapper)
+SURF_EXTENSION_PATH       # Path to extension dist/ directory
+```
+
+**Use cases:**
+- `SURF_NODE_PATH` / `SURF_HOST_PATH`: Package manager installs (e.g., Nix) that store binaries in non-standard locations
+- `SURF_EXTENSION_PATH`: Package managers that create stable symlinks instead of changing paths on reinstall
+
+**Example (Nix):**
+```bash
+export SURF_NODE_PATH=~/.local/share/surf-cli/node
+export SURF_HOST_PATH=~/.local/share/surf-cli/native/host.cjs
+export SURF_EXTENSION_PATH=~/.local/share/surf-cli/extension
 ```
 
 ## Socket API
