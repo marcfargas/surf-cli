@@ -12,7 +12,10 @@ const perplexityClient = require("./perplexity-client.cjs");
 const grokClient = require("./grok-client.cjs");
 const { mapToolToMessage, mapComputerAction, formatToolContent } = require("./host-helpers.cjs");
 
-const SOCKET_PATH = "/tmp/surf.sock";
+const IS_WIN = process.platform === "win32";
+const SURF_TMP = IS_WIN ? path.join(os.tmpdir(), "surf") : "/tmp";
+const SOCKET_PATH = IS_WIN ? "//./pipe/surf" : "/tmp/surf.sock";
+if (IS_WIN) { try { fs.mkdirSync(SURF_TMP, { recursive: true }); } catch {} }
 
 // Cross-platform image resize (macOS: sips, Linux: ImageMagick)
 function resizeImage(filePath, maxSize) {
@@ -27,12 +30,13 @@ function resizeImage(filePath, maxSize) {
       const height = parseInt(sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "0", 10);
       return { success: true, width, height };
     } else {
-      // Linux/other: use ImageMagick (try IM6 first, then IM7)
+      // Linux/Windows: use ImageMagick (try IM6 first, then IM7)
+      const resizeArg = IS_WIN ? `"${maxSize}x${maxSize}>"` : `${maxSize}x${maxSize}\\>`;
       try {
-        execSync(`convert "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+        execSync(`convert "${filePath}" -resize ${resizeArg} "${filePath}"`, { stdio: "pipe" });
       } catch {
         // IM7 uses 'magick' as main command
-        execSync(`magick "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+        execSync(`magick "${filePath}" -resize ${resizeArg} "${filePath}"`, { stdio: "pipe" });
       }
       // Get dimensions (IM7 may need 'magick identify' instead of just 'identify')
       let sizeInfo;
@@ -73,7 +77,7 @@ async function processAiQueue() {
     setTimeout(processAiQueue, 2000);
   }
 }
-const LOG_FILE = "/tmp/surf-host.log";
+const LOG_FILE = path.join(SURF_TMP, "surf-host.log");
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
 const DEFAULT_RETRY_OPTIONS = {
@@ -288,9 +292,7 @@ const log = (msg) => {
 
 log("Host starting...");
 
-try {
-  fs.unlinkSync(SOCKET_PATH);
-} catch {}
+if (!IS_WIN) { try { fs.unlinkSync(SOCKET_PATH); } catch {} }
 
 const pendingRequests = new Map();
 const pendingToolRequests = new Map();
@@ -1204,15 +1206,15 @@ function processInput() {
           } else if (autoScreenshot && tabId && !msg.error && !msg.base64) {
             
             const screenshotId = ++requestCounter;
-            const screenshotPath = `/tmp/pi-auto-${Date.now()}.png`;
+            const screenshotPath = path.join(SURF_TMP, `pi-auto-${Date.now()}.png`);
             
-            const autoFiles = fs.readdirSync("/tmp")
+            const autoFiles = fs.readdirSync(SURF_TMP)
               .filter(f => f.startsWith("pi-auto-") && f.endsWith(".png"))
               .map(f => ({ name: f, time: parseInt(f.match(/pi-auto-(\d+)\.png/)?.[1] || "0", 10) }))
               .sort((a, b) => b.time - a.time);
             if (autoFiles.length >= 10) {
               autoFiles.slice(9).forEach(f => {
-                try { fs.unlinkSync(path.join("/tmp", f.name)); } catch (e) {}
+                try { fs.unlinkSync(path.join(SURF_TMP, f.name)); } catch (e) {}
               });
             }
             pendingToolRequests.set(screenshotId, {
@@ -1440,7 +1442,7 @@ const server = net.createServer((socket) => {
 
 server.listen(SOCKET_PATH, () => {
   log("Socket server listening on " + SOCKET_PATH);
-  fs.chmodSync(SOCKET_PATH, 0o600);
+  if (!IS_WIN) { try { fs.chmodSync(SOCKET_PATH, 0o600); } catch {} }
   writeMessage({ type: "HOST_READY" });
   log("Sent HOST_READY to extension");
 });
@@ -1452,14 +1454,14 @@ server.on("error", (err) => {
 process.on("SIGTERM", () => {
   log("SIGTERM received");
   server.close();
-  try { fs.unlinkSync(SOCKET_PATH); } catch {}
+  if (!IS_WIN) { try { fs.unlinkSync(SOCKET_PATH); } catch {} }
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   log("SIGINT received");
   server.close();
-  try { fs.unlinkSync(SOCKET_PATH); } catch {}
+  if (!IS_WIN) { try { fs.unlinkSync(SOCKET_PATH); } catch {} }
   process.exit(0);
 });
 
