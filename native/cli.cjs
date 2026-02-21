@@ -1775,7 +1775,7 @@ Arguments:
 
 Options:
   -b, --browser   Browser(s) to install for (default: chrome)
-                  Values: chrome, chromium, brave, edge, arc, all
+                  Values: chrome, chromium, brave, edge, arc, helium, all
                   Multiple: --browser chrome,brave
 
 Examples:
@@ -1805,7 +1805,7 @@ Remove native messaging host configuration.
 
 Options:
   -b, --browser   Browser(s) to uninstall from (default: chrome)
-                  Values: chrome, chromium, brave, edge, arc, all
+                  Values: chrome, chromium, brave, edge, arc, helium, all
   -a, --all       Uninstall from all browsers and remove wrapper
 
 Examples:

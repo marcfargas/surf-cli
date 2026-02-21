@@ -39,6 +39,12 @@ const BROWSERS = {
     linux: null,
     win32: null,
   },
+  helium: {
+    name: "Helium",
+    darwin: "Library/Application Support/net.imput.helium/NativeMessagingHosts",
+    linux: null,
+    win32: null,
+  },
 };
 
 const NODE_PATHS = {
@@ -218,7 +224,7 @@ Arguments:
 
 Options:
   -b, --browser   Browser(s) to install for (default: chrome)
-                  Values: chrome, chromium, brave, edge, arc, all
+                  Values: chrome, chromium, brave, edge, arc, helium, all
                   Multiple: --browser chrome,brave
 
 Examples:
@@ -233,7 +239,7 @@ function main() {
 
   if (!extensionId) {
     console.error("Error: Extension ID required");
-    console.error("Usage: install-native-host.cjs <extension-id> [--browser chrome|brave|edge|all]");
+    console.error("Usage: install-native-host.cjs <extension-id> [--browser chrome|chromium|brave|edge|arc|helium|all]");
     console.error("\nFind your extension ID at chrome://extensions (enable Developer Mode)");
     process.exit(1);
   }

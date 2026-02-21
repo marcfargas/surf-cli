@@ -37,6 +37,12 @@ const BROWSERS = {
     linux: null,
     win32: null,
   },
+  helium: {
+    name: "Helium",
+    darwin: "Library/Application Support/net.imput.helium/NativeMessagingHosts",
+    linux: null,
+    win32: null,
+  },
 };
 
 function getWrapperDir() {
@@ -137,7 +143,7 @@ Usage: uninstall-native-host.cjs [options]
 
 Options:
   -b, --browser   Browser(s) to uninstall from (default: chrome)
-                  Values: chrome, chromium, brave, edge, arc, all
+                  Values: chrome, chromium, brave, edge, arc, helium, all
   -a, --all       Uninstall from all browsers and remove wrapper
 
 Examples:
