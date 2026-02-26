@@ -160,6 +160,10 @@ export class CDPController {
       await chrome.debugger.attach(target, "1.3");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("Already attached")) {
+        this.targets.set(tabId, target);
+        return;
+      }
       if (message.includes("Cannot access") || message.includes("Cannot attach")) {
         throw new Error(`Cannot control this page. Chrome restricts automation on chrome://, extensions, and web store pages.`);
       }
@@ -1147,7 +1151,7 @@ export class CDPController {
       expression,
       returnByValue: true,
       awaitPromise: true,
-      timeout: 10000,
+      timeout: 30000,
     });
   }
 

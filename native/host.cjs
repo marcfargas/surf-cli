@@ -697,6 +697,57 @@ function handleToolRequest(msg, socket) {
           });
           writeMessage({ type: "GET_GOOGLE_COOKIES", id: cookieId });
         }),
+        createTab: () => new Promise((resolve) => {
+          const tabCreateId = ++requestCounter;
+          pendingToolRequests.set(tabCreateId, {
+            socket: null,
+            originalId: null,
+            tool: "create_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "GEMINI_NEW_TAB", id: tabCreateId });
+        }),
+        closeTab: (tabIdToClose) => new Promise((resolve) => {
+          const tabCloseId = ++requestCounter;
+          pendingToolRequests.set(tabCloseId, {
+            socket: null,
+            originalId: null,
+            tool: "close_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "GEMINI_CLOSE_TAB", tabId: tabIdToClose, id: tabCloseId });
+        }),
+        jsEval: (tabId, code) => new Promise((resolve) => {
+          const jsId = ++requestCounter;
+          pendingToolRequests.set(jsId, {
+            socket: null,
+            originalId: null,
+            tool: "js_eval",
+            onComplete: (r) => resolve(r)
+          });
+          log(`[gemini] Sending EXECUTE_JAVASCRIPT id=${jsId} tabId=${tabId} code=${code.length} chars`);
+          writeMessage({ type: "EXECUTE_JAVASCRIPT", tabId, code, id: jsId });
+        }),
+        uploadFile: (tabId, filePaths) => new Promise((resolve) => {
+          const uploadId = ++requestCounter;
+          pendingToolRequests.set(uploadId, {
+            socket: null,
+            originalId: null,
+            tool: "upload_file",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "UPLOAD_FILE_TO_TAB", tabId, filePaths, id: uploadId });
+        }),
+        fetchUrl: (url) => new Promise((resolve) => {
+          const fetchId = ++requestCounter;
+          pendingToolRequests.set(fetchId, {
+            socket: null,
+            originalId: null,
+            tool: "fetch_url",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "GEMINI_FETCH_URL", url, id: fetchId });
+        }),
         log: (msg) => log(`[gemini] ${msg}`)
       });
       

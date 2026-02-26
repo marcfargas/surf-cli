@@ -2655,6 +2655,18 @@ delete toolArgs.output;
 if (tool === "aistudio.build" && outputPath) {
   toolArgs.output = path.resolve(outputPath);
 }
+if (tool === "gemini") {
+  if (outputPath) toolArgs.output = path.resolve(outputPath);
+  if (toolArgs["generate-image"] && typeof toolArgs["generate-image"] === "string") {
+    toolArgs["generate-image"] = path.resolve(toolArgs["generate-image"]);
+  }
+  if (toolArgs["edit-image"] && typeof toolArgs["edit-image"] === "string") {
+    toolArgs["edit-image"] = path.resolve(toolArgs["edit-image"]);
+  }
+  if (toolArgs.file && typeof toolArgs.file === "string") {
+    toolArgs.file = path.resolve(toolArgs.file);
+  }
+}
 
 if (tool === "screenshot" && outputPath) {
   if (typeof outputPath !== "string") {

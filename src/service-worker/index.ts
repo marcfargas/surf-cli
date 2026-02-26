@@ -2802,6 +2802,126 @@ export async function handleMessage(
       return result;
     }
 
+    case "GEMINI_NEW_TAB": {
+      const tab = await chrome.tabs.create({
+        url: "https://gemini.google.com/app",
+        active: true,
+      });
+      if (!tab.id) throw new Error("Failed to create tab");
+      return { tabId: tab.id };
+    }
+
+    case "GEMINI_CLOSE_TAB": {
+      const geminiTabId = message.tabId;
+      if (geminiTabId) {
+        try {
+          await cdp.detach(geminiTabId);
+        } catch {}
+        try {
+          await chrome.tabs.remove(geminiTabId);
+        } catch {}
+      }
+      return { success: true };
+    }
+
+    case "UPLOAD_FILE_TO_TAB": {
+      const { tabId: uploadTabId, filePaths } = message;
+      if (!uploadTabId || !filePaths?.length) {
+        throw new Error("UPLOAD_FILE_TO_TAB requires tabId and filePaths");
+      }
+      await cdp.attach(uploadTabId);
+      await cdp.sendCommand(uploadTabId, "DOM.enable", {});
+      await cdp.sendCommand(uploadTabId, "Page.setInterceptFileChooserDialog", { enabled: true });
+
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let handler: ((source: chrome.debugger.Debuggee, method: string, params: any) => void) | null = null;
+      const cleanup = () => {
+        if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+        if (handler) { chrome.debugger.onEvent.removeListener(handler); handler = null; }
+      };
+
+      const attemptFileChooser = (attemptNum: number, timeoutMs: number): Promise<void> => {
+        return new Promise<void>((resolve, reject) => {
+          timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error(`File chooser did not open within ${timeoutMs / 1000}s (attempt ${attemptNum})`));
+          }, timeoutMs);
+          handler = (source: chrome.debugger.Debuggee, method: string, params: any) => {
+            if (source.tabId === uploadTabId && method === "Page.fileChooserOpened") {
+              cleanup();
+              cdp.sendCommand(uploadTabId, "DOM.setFileInputFiles", {
+                files: filePaths,
+                backendNodeId: params.backendNodeId,
+              }).then(() => resolve()).catch(reject);
+            }
+          };
+          chrome.debugger.onEvent.addListener(handler);
+        });
+      };
+
+      const clickUploadSequence = async () => {
+        // Close menu if already open
+        await cdp.sendCommand(uploadTabId, "Runtime.evaluate", {
+          expression: `document.querySelector('button[aria-label="Close upload file menu"]')?.click()`,
+          userGesture: true,
+        });
+        await new Promise(r => setTimeout(r, 300));
+
+        // Open upload menu
+        await cdp.sendCommand(uploadTabId, "Runtime.evaluate", {
+          expression: `document.querySelector('button[aria-label="Open upload file menu"]')?.click()`,
+          userGesture: true,
+        });
+        await new Promise(r => setTimeout(r, 500));
+
+        // Click "Upload files" button
+        await cdp.sendCommand(uploadTabId, "Runtime.evaluate", {
+          expression: `document.querySelector('[data-test-id="local-images-files-uploader-button"]')?.click()`,
+          userGesture: true,
+        });
+      };
+
+      const maxAttempts = 3;
+      const timeouts = [10000, 15000, 20000];
+      let lastError: Error | null = null;
+
+      try {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            const fileSetPromise = attemptFileChooser(attempt, timeouts[attempt - 1]);
+            await clickUploadSequence();
+            await fileSetPromise;
+            return { success: true };
+          } catch (err) {
+            lastError = err as Error;
+            cleanup();
+            if (attempt < maxAttempts) {
+              await new Promise(r => setTimeout(r, 1000));
+            }
+          }
+        }
+        throw new Error(`File upload failed after ${maxAttempts} attempts: ${lastError?.message}`);
+      } finally {
+        cleanup();
+        try { await cdp.sendCommand(uploadTabId, "Page.setInterceptFileChooserDialog", { enabled: false }); } catch {}
+      }
+    }
+
+    case "GEMINI_FETCH_URL": {
+      const imageUrl = message.url;
+      if (!imageUrl) throw new Error("No URL provided");
+      const resp = await fetch(imageUrl, { credentials: "include" });
+      if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+      const blob = await resp.blob();
+      const reader = new FileReader();
+      const b64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = () => reject(new Error("FileReader failed"));
+        reader.readAsDataURL(blob);
+      });
+      return { b64, size: blob.size, type: blob.type };
+    }
+
     case "AISTUDIO_NEW_TAB": {
       const url = message.url || "https://aistudio.google.com/prompts/new_chat";
       const tab = await chrome.tabs.create({ url, active: true });
@@ -3006,6 +3126,7 @@ const COMMANDS_WITHOUT_TAB = new Set([
   "GET_CHATGPT_COOKIES", "GET_GOOGLE_COOKIES", "GET_TWITTER_COOKIES",
   "PERPLEXITY_NEW_TAB", "PERPLEXITY_CLOSE_TAB", "PERPLEXITY_EVALUATE", "PERPLEXITY_CDP_COMMAND",
   "GROK_NEW_TAB", "GROK_CLOSE_TAB", "GROK_EVALUATE", "GROK_CDP_COMMAND",
+  "GEMINI_NEW_TAB", "GEMINI_CLOSE_TAB", "GEMINI_FETCH_URL", "UPLOAD_FILE_TO_TAB",
   "AISTUDIO_NEW_TAB", "AISTUDIO_CLOSE_TAB", "AISTUDIO_EVALUATE", "AISTUDIO_CDP_COMMAND",
   "DOWNLOADS_SEARCH",
   "WINDOW_NEW", "WINDOW_LIST", "WINDOW_FOCUS", "WINDOW_CLOSE", "WINDOW_RESIZE",

@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.7.0] - 2026-02-25
+
+### Added
+- **Gemini image generation** (`surf gemini --generate-image`) - Generate images via UI automation. Google made image generation session-bound, blocking external HTTP requests. This feature automates the browser UI: opens a Gemini tab, types the prompt, clicks send, polls for generated images, and downloads via the extension's credentialed fetch.
+- **Gemini image editing** (`surf gemini --edit-image`) - Edit existing images with text prompts. Uses CDP file chooser interception to upload images, then follows the same UI automation flow as generation.
+
+### Fixed
+- **Gemini file upload reliability** - Added retry logic (3 attempts with 10s/15s/20s timeouts) and stale menu handling for the file chooser flow.
+
 ## [2.6.0] - 2026-02-21
 
 ### Added
