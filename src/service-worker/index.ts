@@ -732,27 +732,34 @@ export async function handleMessage(
       const deltaX = message.deltaX || 0;
       const deltaY = message.deltaY || 0;
       
+      const scrollScript = (dx: number, dy: number) => {
+        const before = { x: window.scrollX, y: window.scrollY };
+        window.scrollBy(dx, dy);
+        const after = { x: window.scrollX, y: window.scrollY };
+        return { 
+          scrollX: after.x, 
+          scrollY: after.y,
+          scrolled: before.x !== after.x || before.y !== after.y
+        };
+      };
+      
       try {
-        const viewport = await cdp.getViewportSize(tabId);
-        const x = message.x ?? viewport.width / 2;
-        const y = message.y ?? viewport.height / 2;
-        await cdp.scroll(tabId, x, y, deltaX, deltaY);
+        const result = await cdp.evaluateScript(tabId, 
+          `(${scrollScript.toString()})(${deltaX}, ${deltaY})`
+        );
+        return result.result?.value || { error: "Script failed" };
       } catch {
         try {
-          const scrollFallback = (dx: number, dy: number) => {
-            window.scrollBy(dx, dy);
-            return { scrollX: window.scrollX, scrollY: window.scrollY };
-          };
-          await chrome.scripting.executeScript({
+          const results = await chrome.scripting.executeScript({
             target: { tabId },
-            func: scrollFallback,
+            func: scrollScript,
             args: [deltaX, deltaY],
           });
+          return results[0]?.result || { error: "Script failed" };
         } catch {
           return { error: "Cannot scroll on this page (restricted)" };
         }
       }
-      return { success: true };
     }
 
     case "EXECUTE_KEY": {

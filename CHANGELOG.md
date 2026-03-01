@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.7.1] - 2026-02-28
+
+### Fixed
+- **Scroll command failing silently** - Fixed `surf scroll` not working on sites with `scroll-behavior: smooth` (e.g., component.gallery). CDP `mouseWheel` events were silently ignored on these sites. Now uses `window.scrollBy()` via script evaluation, which works reliably on all sites.
+
 ## [2.7.0] - 2026-02-25
 
 ### Added
