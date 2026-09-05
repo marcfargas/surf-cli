@@ -3,6 +3,9 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { execFileSync, execSync } = require("child_process");
+const { parseListenEndpoint } = require("../native/listener.cjs");
+const { normalizeSocketConfig } = require("../native/socket-permissions.cjs");
+const { getStateDir, loadHostIdentity, loadRegistry } = require("../native/remote-auth.cjs");
 
 const HOST_NAME = "surf.browser.host";
 
@@ -164,7 +167,9 @@ function wslPathToWindowsPath(wslPath) {
   }
 }
 
-function createWrapper(wrapperDir, nodePath, hostPath, target = process.platform) {
+function createWrapper(wrapperDir, nodePath, hostPath, target = process.platform, listen, socketMode, socketGroup) {
+  const socketConfig = normalizeSocketConfig(socketMode, socketGroup);
+  assertSocketAccessTargetSupported(socketConfig.mode, socketConfig.group, target);
   fs.mkdirSync(wrapperDir, { recursive: true });
 
   if (target === "wsl-windows") {
@@ -184,13 +189,29 @@ function createWrapper(wrapperDir, nodePath, hostPath, target = process.platform
 
   const shPath = path.join(wrapperDir, "host-wrapper.sh");
   const hostDir = path.dirname(hostPath);
+  const socketEnvironment = [
+    socketConfig.mode === undefined ? "" : `: "\${SURF_SOCKET_MODE:=${socketConfig.mode.toString(8)}}"\nexport SURF_SOCKET_MODE\n`,
+    socketConfig.group === undefined ? "" : `: "\${SURF_SOCKET_GROUP:=${socketConfig.group}}"\nexport SURF_SOCKET_GROUP\n`,
+  ].join("");
   const content = `#!/usr/bin/env bash
 cd "${hostDir}"
-exec "${nodePath}" "${hostPath}" "$@"
+${listen ? `: "\${SURF_LISTEN:=${listen}}"\nexport SURF_LISTEN\n` : ""}${socketEnvironment}exec "${nodePath}" "${hostPath}" "$@"
 `;
   fs.writeFileSync(shPath, content);
   fs.chmodSync(shPath, "755");
   return shPath;
+}
+
+function assertListenTargetSupported(listen, target) {
+  if (listen && (target === "win32" || target === "wsl-windows")) {
+    throw new Error("--listen is not supported for Windows native-host wrappers");
+  }
+}
+
+function assertSocketAccessTargetSupported(socketMode, socketGroup, target) {
+  if ((socketMode !== undefined || socketGroup !== undefined) && (target === "win32" || target === "wsl-windows")) {
+    throw new Error("--socket-mode and --socket-group are only supported for POSIX native-host wrappers");
+  }
 }
 
 function readExistingManifest(manifestPath) {
@@ -268,7 +289,14 @@ function installWindowsRegistry(browser, extensionId, wrapperPath) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const result = { extensionId: null, browsers: ["chrome"], target: "auto" };
+  const result = {
+    extensionId: null,
+    browsers: ["chrome"],
+    target: "auto",
+    listen: undefined,
+    socketMode: undefined,
+    socketGroup: undefined,
+  };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -281,6 +309,15 @@ function parseArgs() {
       }
     } else if (arg === "--target") {
       result.target = args[++i];
+    } else if (arg === "--listen") {
+      result.listen = args[++i];
+      if (!result.listen || result.listen.startsWith("--")) throw new Error("--listen requires a Tailnet IP and port");
+    } else if (arg === "--socket-mode") {
+      result.socketMode = args[++i];
+      if (!result.socketMode || result.socketMode.startsWith("--")) throw new Error("--socket-mode requires 600 or 660");
+    } else if (arg === "--socket-group") {
+      result.socketGroup = args[++i];
+      if (!result.socketGroup || result.socketGroup.startsWith("--")) throw new Error("--socket-group requires a group name or gid");
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -307,17 +344,31 @@ Options:
                   Multiple: --browser chrome,brave
   --target        Install target: auto, linux, windows
                   On WSL2, auto installs for Windows Chrome. Use linux for WSLg/Linux browsers.
+  --listen <tailscale-ip>:<port>
+                  Persist an authenticated Tailnet-only listener endpoint.
+                  Requires at least one surf remote authorize client first.
+                  Supports Tailscale IPv4 or IPv6 addresses; POSIX wrappers only.
+  --socket-mode <600|660>
+                  Persist the local Unix socket mode (default: 600).
+                  Mode 660 requires --socket-group; POSIX wrappers only.
+  --socket-group <group-or-gid>
+                  Persist the local Unix socket group for mode 660.
+                  Use a dedicated group; this grants full Surf authority.
 
 Examples:
   node install-native-host.cjs abcdefghijklmnopabcdefghijklmnop
   node install-native-host.cjs abcdefghijklmnop --browser brave
   node install-native-host.cjs abcdefghijklmnop --browser all
   node install-native-host.cjs abcdefghijklmnop --target linux
+  node install-native-host.cjs abcdefghijklmnop --listen 100.64.1.2:4321
+  node install-native-host.cjs abcdefghijklmnop --socket-mode 660 --socket-group surf
 `);
 }
 
 function main() {
-  const { extensionId, browsers, target } = parseArgs();
+  let parsed;
+  try { parsed = parseArgs(); } catch (error) { console.error(`Error: ${error.message}`); process.exit(1); }
+  const { extensionId, browsers, target, listen, socketMode, socketGroup } = parsed;
 
   if (!extensionId) {
     console.error("Error: Extension ID required");
@@ -331,6 +382,17 @@ function main() {
     console.error("Expected 32 lowercase letters (a-p)");
     process.exit(1);
   }
+  let listener;
+  try {
+    listener = listen ? parseListenEndpoint(listen).display : undefined;
+    if (listener) {
+      const stateDir = getStateDir();
+      loadHostIdentity(stateDir);
+      if (loadRegistry(stateDir).clients.length === 0) {
+        throw new Error("--listen requires at least one authorized remote client; run `surf remote authorize <label> --output <path>` first");
+      }
+    }
+  } catch (error) { console.error(`Error: ${error.message}`); process.exit(1); }
 
   if (!["auto", "linux", "windows"].includes(target)) {
     console.error("Error: Invalid --target value. Expected auto, linux, or windows");
@@ -349,6 +411,12 @@ function main() {
   }
 
   const effectiveTarget = runningInWsl && target !== "linux" ? "wsl-windows" : process.platform;
+  let socketConfig;
+  try {
+    socketConfig = normalizeSocketConfig(socketMode, socketGroup);
+    assertListenTargetSupported(listen, effectiveTarget);
+    assertSocketAccessTargetSupported(socketMode, socketGroup, effectiveTarget);
+  } catch (error) { console.error(`Error: ${error.message}`); process.exit(1); }
 
   const nodePath = findNode();
   if (!nodePath) {
@@ -377,7 +445,15 @@ function main() {
   console.log(`Wrapper dir: ${wrapperDir}`);
   console.log("");
 
-  const wrapperPath = createWrapper(wrapperDir, nodePath, hostPath, effectiveTarget);
+  const wrapperPath = createWrapper(
+    wrapperDir,
+    nodePath,
+    hostPath,
+    effectiveTarget,
+    listener,
+    socketConfig.mode,
+    socketConfig.group,
+  );
   console.log(`Created wrapper: ${wrapperPath}`);
   console.log("");
 
@@ -419,4 +495,6 @@ if (require.main === module) {
 module.exports = {
   createWrapper,
   writeManifest,
+  assertListenTargetSupported,
+  assertSocketAccessTargetSupported,
 };

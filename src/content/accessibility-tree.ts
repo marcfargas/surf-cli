@@ -1,3 +1,5 @@
+import type { VisualIndicatorMessageType } from "./visual-indicator.ts";
+
 export {};
 
 declare global {
@@ -152,16 +154,23 @@ function getResolvedRole(element: Element): string {
 
 if (!window.__piElementMap) window.__piElementMap = {};
 
+interface ElementRef {
+  role: string;
+  name: string;
+  ref: string;
+}
+
+const elementRefs = new WeakMap<Element, ElementRef>();
 let globalRefCounter = 0;
 
 function getOrAssignRef(element: Element, role: string, name: string): string {
-  const existing = (element as any)._piRef as { role: string; name: string; ref: string } | undefined;
+  const existing = elementRefs.get(element);
   if (existing && existing.role === role && existing.name === name) {
     return existing.ref;
   }
   
   const ref = `e${++globalRefCounter}`;
-  (element as any)._piRef = { role, name, ref };
+  elementRefs.set(element, { role, name, ref });
   return ref;
 }
 
@@ -1258,16 +1267,63 @@ function setFormValue(ref: string, value: string | boolean | number): { success:
   }
 }
 
-function getPageText(): { text: string; title: string; url: string; error?: string } {
+function smartType(selector: string, text: string, clear = true, submit = false): { success: boolean; contentEditable?: boolean; error?: string } {
+  try {
+    const element = document.querySelector(selector) as HTMLElement | null;
+    if (!element) return { success: false, error: `Element not found: ${selector}` };
+
+    const contentEditableChild = element.querySelector<HTMLElement>('[contenteditable="true"]');
+    const target = contentEditableChild || element;
+    const contentEditable = element.isContentEditable || !!contentEditableChild;
+    target.focus();
+
+    if (clear) {
+      if (contentEditable) target.textContent = "";
+      else (target as HTMLInputElement | HTMLTextAreaElement).value = "";
+    }
+
+    if (contentEditable) target.textContent = text;
+    else (target as HTMLInputElement | HTMLTextAreaElement).value = text;
+
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event("change", { bubbles: true }));
+
+    if (submit) {
+      const form = element.closest("form");
+      const submitButton = form?.querySelector<HTMLElement>('button[type="submit"], input[type="submit"]')
+        || document.querySelector<HTMLElement>('button[type="submit"], button[data-testid*="send"], button[aria-label*="Send"]');
+      if (submitButton) submitButton.click();
+      else if (form) form.dispatchEvent(new Event("submit", { bubbles: true }));
+      else target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+    }
+
+    return { success: true, contentEditable };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function truncateToUtf8Bytes(input: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(input);
+  if (encoded.length <= maxBytes) return input;
+  let end = maxBytes;
+  while (end > 0 && (encoded[end] & 0xc0) === 0x80) end--;
+  return new TextDecoder("utf-8", { fatal: false }).decode(encoded.subarray(0, end));
+}
+
+function getPageText(options: { maxBytes?: number } = {}): { text: string; title: string; url: string; error?: string } {
   try {
     const article = document.querySelector("article");
     const main = document.querySelector("main");
     const content = article || main || document.body;
 
-    const text = content.textContent
+    const normalized = content.textContent
       ?.replace(/\s+/g, " ")
-      .trim()
-      .substring(0, 50000) || "";
+      .trim() || "";
+    const text = Number.isFinite(options.maxBytes) && options.maxBytes! > 0
+      ? truncateToUtf8Bytes(normalized, options.maxBytes!)
+      : normalized.substring(0, 50000);
 
     return {
       text,
@@ -1383,8 +1439,70 @@ function uploadImage(
   }
 }
 
+let playbookWatch: { includeInputValues: boolean } | null = null;
+
+function watchSelector(element: Element): string {
+  if (element.id) return `#${CSS.escape(element.id)}`;
+  for (const name of ["data-testid", "data-test-id", "name", "aria-label"]) {
+    const value = element.getAttribute(name);
+    if (value) return `${element.tagName.toLowerCase()}[${name}=${JSON.stringify(value)}]`;
+  }
+  return element.tagName.toLowerCase();
+}
+
+function postWatchEvent(event: string, element?: Element, value?: string): void {
+  if (!playbookWatch) return;
+  chrome.runtime.sendMessage({
+    type: "PLAYBOOK_WATCH_EVENT",
+    event,
+    selector: element ? watchSelector(element) : undefined,
+    value,
+    url: location.href,
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
+}
+
+if (typeof document.addEventListener === "function") {
+  document.addEventListener("click", (event) => {
+    if (event.isTrusted && event.target instanceof Element) postWatchEvent("click", event.target);
+  }, true);
+  document.addEventListener("change", (event) => {
+    if (!event.isTrusted || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement)) return;
+    const target = event.target;
+    const secret = target instanceof HTMLInputElement && target.type === "password";
+    const value = playbookWatch?.includeInputValues && !secret ? target.value : "<input>";
+    postWatchEvent("input", target, value);
+  }, true);
+}
+if (typeof window.addEventListener === "function") {
+  window.addEventListener("popstate", () => postWatchEvent("navigation"));
+  window.addEventListener("hashchange", () => postWatchEvent("navigation"));
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
+    case "PLAYBOOK_WATCH_START":
+      playbookWatch = { includeInputValues: message.includeInputValues === true };
+      sendResponse({ success: true });
+      break;
+    case "PLAYBOOK_WATCH_STOP":
+      playbookWatch = null;
+      sendResponse({ success: true });
+      break;
+    case "SHOW_AGENT_INDICATORS":
+    case "HIDE_AGENT_INDICATORS":
+    case "HIDE_FOR_TOOL_USE":
+    case "SHOW_AFTER_TOOL_USE":
+    case "SHOW_STATIC_INDICATOR":
+    case "HIDE_STATIC_INDICATOR": {
+      if (!window.__piVisualIndicatorMessageHandler) {
+        sendResponse({ error: "Visual indicator content script not loaded." });
+        break;
+      }
+      window.__piVisualIndicatorMessageHandler(message.type as VisualIndicatorMessageType);
+      sendResponse({ success: true });
+      break;
+    }
     case "GENERATE_ACCESSIBILITY_TREE": {
       const options = message.options || {};
       
@@ -1467,8 +1585,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     }
     case "GET_PAGE_TEXT": {
-      const result = getPageText();
+      const result = getPageText(message.options || {});
       sendResponse(result);
+      break;
+    }
+    case "SMART_TYPE": {
+      sendResponse(smartType(message.selector, message.text, message.clear, message.submit));
       break;
     }
     case "GET_FRAME_BY_SELECTOR": {
